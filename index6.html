@@ -84,9 +84,9 @@
                 const durationInSeconds = convertDurationToSeconds(duration);
                 outputLabel.textContent = `Extracted segment duration: ${durationInSeconds} seconds`;
 
-                // Calculate and display intervals
-                const intervals = calculateIntervals(durationInSeconds, 10);
-                displayIntervals(intervals);
+                // Calculate and display interval
+                const interval = calculateInterval(durationInSeconds, 10);
+                outputLabel.textContent += `<br>Interval for 10 equally spaced periods: ${interval.toFixed(2)} seconds`;
 
                 // Clean up
                 await ffmpeg.unmount(inputDir);
@@ -109,19 +109,8 @@
             return (hours * 3600) + (minutes * 60) + seconds;
         }
 
-        function calculateIntervals(durationInSeconds, intervalsCount) {
-            const interval = durationInSeconds / intervalsCount;
-            const intervals = [];
-            for (let i = 1; i <= intervalsCount; i++) {
-                intervals.push((interval * i).toFixed(2));
-            }
-            return intervals;
-        }
-
-        function displayIntervals(intervals) {
-            const outputLabel = document.getElementById('outputLabel');
-            const intervalsText = intervals.map((time, index) => `Interval ${index + 1}: ${time} seconds`).join('<br>');
-            outputLabel.innerHTML += `<br>Intervals:<br>${intervalsText}`;
+        function calculateInterval(durationInSeconds, intervalsCount) {
+            return durationInSeconds / intervalsCount;
         }
 
         function downloadFileByBlob(url, filename) {

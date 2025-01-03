@@ -53,8 +53,16 @@
                 await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
 
                 const logContent = document.getElementById('tty').innerText;
+                console.log("Log Content:", logContent); // Debugging: Log content
                 const duration = extractDurationFromLog(logContent);
+                console.log("Extracted Duration:", duration); // Debugging: Extracted duration
                 const durationInSeconds = convertDurationToSeconds(duration);
+                console.log("Duration in Seconds:", durationInSeconds); // Debugging: Duration in seconds
+
+                if (durationInSeconds === 'N/A') {
+                    outputLabel.innerHTML = `Extracted segment duration: N/A seconds`;
+                    return;
+                }
 
                 const interval = calculateInterval(durationInSeconds, 10);
 
@@ -89,7 +97,14 @@
         function extractDurationFromLog(log) {
             const regex = /Duration: (\d{2}:\d{2}:\d{2}).(\d+),/;
             const match = log.match(regex);
-            return match ? match[1] : 'N/A';
+            if (match) {
+                console.log(`Duration extracted: ${match[1]}.${match[2]}`); // Debugging: Log extracted duration
+                return match[1];
+            } else {
+                console.log("Duration extraction failed. Log content:");
+                console.log(log);
+                return 'N/A';
+            }
         }
 
         function convertDurationToSeconds(duration) {

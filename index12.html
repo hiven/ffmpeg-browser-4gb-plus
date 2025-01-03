@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FFmpeg Segment Extractor</title>
+    <script src="common.js"></script>
+</head>
+<body>
+    <h1>FFmpeg Segment Extractor</h1>
+
+    <input type="file" id="fileInput" accept="video/*">
+    <button id="runButton" disabled>Extract Segment</button>
+
+    <div id="tty" style="border: 1px solid #ccc; padding: 10px; margin-top: 20px; height: 200px; overflow-y: auto;"></div>
+
+    <div id="outputLabel" style="margin-top: 20px; font-weight: bold;"></div>
+    <div id="thumbnailsContainer" style="margin-top: 10px;"></div>
+
+    <script>
+        async function initializeFFmpeg() {
+            try {
+                await load(false, progress => {
+                    console.log(`Loading FFmpeg: ${Math.round((progress.received / progress.total) * 100)}%`);
+                });
+                console.log("FFmpeg loaded successfully");
+                document.getElementById('runButton').disabled = false;
+            } catch (error) {
+                console.error("Failed to load FFmpeg", error);
+                alert("Error loading FFmpeg.");
+            }
+        }
+
+        async function runCommand() {
+            const fileInput = document.getElementById('fileInput');
+            const outputLabel = document.getElementById('outputLabel');
+            const thumbnailsContainer = document.getElementById('thumbnailsContainer');
+
+            if (!fileInput.files.length) {
+                alert('Please select a file.');
+                return;
+            }
+
+            const file = fileInput.files[0];
+            const inputDir = '/input';
+            const inputFile = `${inputDir}/${file.name}`;
+            const thumbnailFilePattern = '/thumbnail%03d.png';
+
+            try {
+                cleanLog();
+                thumbnailsContainer.innerHTML = '';
+
+                await ffmpeg.createDir(inputDir);
+                await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
+
+                // Step 1: Extract file information and duration
+                const infoArgs = ['-i', inputFile];
+                await ffmpeg.exec(infoArgs);
+                const logContent = document.getElementById('tty').innerText;
+                const duration = extractDurationFromLog(logContent);
+                const durationInSeconds = convertDurationToSeconds(duration);
+                outputLabel.innerHTML = `Extracted segment duration: ${durationInSeconds} seconds`;
+
+                const interval = calculateInterval(durationInSeconds, 10);
+                outputLabel.innerHTML += `<br>Interval for 10 equally spaced periods: ${interval.toFixed(2)} seconds`;
+
+                // Step 2: Generate multiple thumbnails with optimizations
+                const thumbnailArgs = [
+                    '-skip_frame', 'nokey',
+                    '-i', inputFile,
+                    '-vf', `fps=1/${interval}`,
+                    '-vsync', '2',
+                    '-flags2', 'fast',
+                    thumbnailFilePattern
+                ];
+                const thumbnailErr = await ffmpeg.exec(thumbnailArgs);
+
+                if (thumbnailErr !== 0) {
+                    log("<strong>Error generating thumbnails! Please see the log above.</strong>");
+                } else {
+                    log("Generating thumbnails...");
+                    for (let i = 1; i <= Math.ceil(durationInSeconds / interval); i++) {
+                        const thumbnailFile = `/thumbnail${i.toString().padStart(3, '0')}.png`;
+                        const thumbnailData = await ffmpeg.readFile(thumbnailFile);
+                        const thumbnailURL = URL.createObjectURL(new Blob([thumbnailData.buffer], { type: "image/png" }));
+                        const img = document.createElement('img');
+                        img.src = thumbnailURL;
+                        img.style.marginTop = '10px';
+                        img.style.display = 'block';
+                        thumbnailsContainer.appendChild(img);
+                    }
+                }
+
+                await ffmpeg.unmount(inputDir);
+                await ffmpeg.deleteDir(inputDir);
+            } catch (error) {
+                console.error(error);
+                outputLabel.textContent = "Error extracting segment. See console for details.";
+            }
+        }
+
+        function extractDurationFromLog(log) {
+            const regex = /Duration: (\d{2}:\d{2}:\d{2}).(\d+),/;
+            const match = log.match(regex);
+            return match ? match[1] : 'N/A';
+        }
+
+        function convertDurationToSeconds(duration) {
+            if (duration === 'N/A') return duration;
+            const [hours, minutes, seconds] = duration.split(':').map(Number);
+            return (hours * 3600) + (minutes * 60) + seconds;
+        }
+
+        function calculateInterval(durationInSeconds, intervalsCount) {
+            return durationInSeconds / intervalsCount;
+        }
+
+        function downloadFileByBlob(url, filename) {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        document.getElementById('runButton').addEventListener('click', runCommand);
+
+        initializeFFmpeg();
+    </script>
+</body>
+</html>

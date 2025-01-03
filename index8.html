@@ -52,6 +52,12 @@
                 await ffmpeg.createDir(inputDir);
                 await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
 
+                // Extract duration first
+                const durationArgs = [
+                    '-i', inputFile,
+                    '-f', 'null', '-'
+                ];
+                await ffmpeg.exec(durationArgs);
                 const logContent = document.getElementById('tty').innerText;
                 const duration = extractDurationFromLog(logContent);
                 const durationInSeconds = convertDurationToSeconds(duration);
@@ -60,6 +66,7 @@
                 const interval = calculateInterval(durationInSeconds, 10);
                 outputLabel.innerHTML += `<br>Interval for 10 equally spaced periods: ${interval.toFixed(2)} seconds`;
 
+                // Generate thumbnails using interval
                 const thumbnailArgs = [
                     '-i', inputFile,
                     '-vf', `fps=1/${interval}`,

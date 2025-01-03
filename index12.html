@@ -70,6 +70,9 @@
                     '-vf', `fps=1/${interval}`,
                     '-vsync', '2',
                     '-flags2', 'fast',
+                    '-an', // no audio
+                    '-sn', // no subtitles
+                    '-dn', // no data streams
                     thumbnailFilePattern
                 ];
                 const thumbnailErr = await ffmpeg.exec(thumbnailArgs);

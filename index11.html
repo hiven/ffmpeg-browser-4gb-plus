@@ -67,6 +67,8 @@
                 const thumbnailArgs = [
                     '-i', inputFile,
                     '-vf', `fps=1/${interval}`,
+                    '-vsync', '2',
+                    '-flags2', 'fast',
                     thumbnailFilePattern
                 ];
                 const thumbnailErr = await ffmpeg.exec(thumbnailArgs);

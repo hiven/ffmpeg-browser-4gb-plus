@@ -73,7 +73,8 @@
                     '-skip_frame', interval >= 2 ? 'nokey' : 'default',
                     '-i', inputFile,
                     '-vf', `fps=1/${interval},scale=400:-1:flags=bilinear`,
-                    '-vsync', '2',
+                    //'-vsync', '2',
+                    '-fps_mode', 'drop',
                     '-flags2', 'fast',
                     '-an', // no audio
                     '-sn', // no subtitles

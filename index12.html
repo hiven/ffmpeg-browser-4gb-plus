@@ -67,7 +67,7 @@
                 const thumbnailArgs = [
                     '-skip_frame', interval >= 2 ? 'nokey' : 'default',
                     '-i', inputFile,
-                    '-vf', `fps=1/${interval},scale=400:-1`,
+                    '-vf', `fps=1/${interval},scale=400:-1:flags=bilinear`,
                     '-vsync', '2',
                     '-flags2', 'fast',
                     '-an', // no audio

@@ -65,7 +65,7 @@
 
                 // Step 2: Generate multiple thumbnails with optimizations
                 const thumbnailArgs = [
-                    '-skip_frame', 'nokey',
+                    '-skip_frame', interval >= 2 ? 'nokey' : 'default',
                     '-i', inputFile,
                     '-vf', `fps=1/${interval}`,
                     '-vsync', '2',

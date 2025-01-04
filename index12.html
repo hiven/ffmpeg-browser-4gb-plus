@@ -53,7 +53,12 @@
                 await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
 
                 // Step 1: Extract file information and duration
-                const infoArgs = ['-i', inputFile];
+                //const infoArgs = ['-i', inputFile];
+                const infoArgs = [
+                    '-hide_banner',  // Hide the banner
+                    '-v', 'info',   // Set verbosity to only show errors
+                    '-i', inputFile  // Input file for FFmpeg
+                ];
                 await ffmpeg.exec(infoArgs);
                 const logContent = document.getElementById('tty').innerText;
                 const duration = extractDurationFromLog(logContent);

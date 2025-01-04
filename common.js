@@ -2,7 +2,7 @@ var ffmpeg = null;
 var tryMultiThread = false; // currently use false since it's not stable
 
 const CORE_VERSION = "0.12.6"
-const FFMPEG_VERSION = "0.12.12"
+const FFMPEG_VERSION = "0.12.10"
 const baseURLFFMPEG = `https://unpkg.com/@ffmpeg/ffmpeg@${FFMPEG_VERSION}/dist/umd`;
 const baseURLCore = `https://unpkg.com/@ffmpeg/core@${CORE_VERSION}/dist/umd`;
 const baseURLCoreMT = `https://unpkg.com/@ffmpeg/core-mt@${CORE_VERSION}/dist/umd`;

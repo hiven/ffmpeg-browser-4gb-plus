@@ -48,7 +48,7 @@
 
             try {
                 cleanLog();
-                thumbnailsContainer.innerHTML = '';
+                //thumbnailsContainer.innerHTML = '';
 
                 await ffmpeg.createDir(inputDir);
                 await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);

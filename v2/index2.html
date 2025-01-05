@@ -56,8 +56,8 @@
                 const durationArgs = [
                     '-hide_banner',
                     '-v', 'info',
-                    '-i', inputFile,
-                    '-f', 'null', '-'
+                    '-i', inputFile
+                    //'-f', 'null', '-'
                 ];
                 await ffmpeg.exec(durationArgs);
                 const logContent = document.getElementById('tty').innerText;

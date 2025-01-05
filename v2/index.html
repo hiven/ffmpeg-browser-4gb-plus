@@ -72,6 +72,10 @@
                 const thumbnailArgs = [
                     '-i', inputFile,
                     '-vf', `fps=1/${interval}`,
+                    '-flags2', 'fast',
+                    '-an', // no audio
+                    '-sn', // no subtitles
+                    '-dn', // no data streams
                     thumbnailFile
                 ];
                 const thumbnailErr = await ffmpeg.exec(thumbnailArgs);

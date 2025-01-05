@@ -71,7 +71,7 @@
                 // Generate thumbnails using interval
                 const thumbnailArgs = [
                     '-i', inputFile,
-                    '-vf', `fps=1/${interval}`,
+                    '-vf', `fps=1/${interval},scale=400:-1:flags=bilinear`,
                     '-flags2', 'fast',
                     '-an', // no audio
                     '-sn', // no subtitles

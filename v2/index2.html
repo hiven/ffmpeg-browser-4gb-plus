@@ -70,6 +70,7 @@
 
                 // Generate thumbnails using interval
                 const thumbnailArgs = [
+                    '-skip_frame', 'nokey',
                     '-i', inputFile,
                     '-vf', `fps=1/${interval},scale=400:-1:flags=bilinear`,
                     '-flags2', 'fast',

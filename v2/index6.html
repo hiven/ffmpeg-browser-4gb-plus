@@ -109,6 +109,7 @@
                 const thumbnailArgs = [
                     '-skip_frame', 'nokey',
                     '-i', inputFile,
+                    '-hwaccel', 'none',   /// Testing
                     '-vf', `fps=1/${interval},scale=400:-1:flags=bilinear`,
                     '-flags2', 'fast',
                     '-an', '-sn', '-dn',

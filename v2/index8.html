@@ -121,8 +121,7 @@
         const thumbnailErr = await ffmpeg.exec(thumbnailArgs);
 
         if (thumbnailErr !== 0) {
-          outputLabel.textContent = "❌ Error generating thumbnails. See log above for details.";
-          log("<strong>Error generating thumbnails! Please see the log above.</strong>");
+          outputLabel.textContent = "Error generating thumbnails. See log above for details.";
         } else {
           log("Generating thumbnails...");
           outputLabel.textContent = "";

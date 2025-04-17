@@ -94,7 +94,7 @@
         thumbnailsContainer.replaceChildren();
         metadataList.replaceChildren();
         cleanLog();
-        outputLabel.textContent = "Calculating duration...";
+        outputLabel.textContent = "Generating thumbnails, please wait...";
 
         await ffmpeg.createDir(inputDir);
         await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
@@ -109,8 +109,6 @@
         const metadata = extractMetadataFromLog(logContent);
         displayMetadata(metadata);
 
-        outputLabel.textContent = "Generating thumbnails, please wait...";
-
         const thumbnailArgs = [
           '-skip_frame', 'nokey',
           '-i', inputFile,
@@ -122,9 +120,11 @@
         const thumbnailErr = await ffmpeg.exec(thumbnailArgs);
 
         if (thumbnailErr !== 0) {
+          outputLabel.textContent = "❌ Error generating thumbnails. See log above for details.";
           log("<strong>Error generating thumbnails! Please see the log above.</strong>");
         } else {
           log("Generating thumbnails...");
+          outputLabel.textContent = "";
           for (let i = 1; i <= NUM_THUMBNAILS; i++) {
             const thumbnailData = await ffmpeg.readFile(`/thumbnail_${i}.png`);
             const thumbnailURL = URL.createObjectURL(new Blob([thumbnailData.buffer], { type: "image/png" }));
@@ -134,12 +134,11 @@
           }
         }
 
-        outputLabel.textContent = "";
         await ffmpeg.unmount(inputDir);
         await ffmpeg.deleteDir(inputDir);
       } catch (error) {
         console.error(error);
-        outputLabel.textContent = "Error extracting segment. See console for details.";
+        outputLabel.textContent = "❌ Error extracting segment. See console for details.";
       }
     }
 

@@ -88,13 +88,15 @@
 
     async function initFFmpeg() {
       try {
+        // Show loading percentage in console
         await load(false, ({ received, total }) =>
-          log(`Loading FFmpeg: ${Math.round(received/total*100)}%`)
+          console.log(`Loading FFmpeg: ${Math.round(received/total*100)}%`)
         );
-        // Route FFmpeg logs to our log box
+        // Route only FFmpeg processing logs to the on-screen TTY
         ffmpeg.setLogger(({ message }) => log(message));
 
-        log('✅ FFmpeg loaded');
+        // Confirmation in console, not in TTY
+        console.log('✅ FFmpeg loaded');
         DOM.runButton.disabled = false;
       } catch {
         log('❌ Failed to load FFmpeg');
@@ -168,7 +170,6 @@
       await ffmpeg.mount('WORKERFS',{files:[file]},mnt);
 
       DOM.output.textContent = 'Probing metadata...';
-      // Probe with null output
       await ffmpeg.exec(['-hide_banner','-v','info','-i',inPath,'-f','null','-']);
       const logText = DOM.logBox.innerText;
       const meta = parseMeta(logText);

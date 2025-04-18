@@ -58,7 +58,6 @@
 
   <script>
     const NUM_THUMBNAILS = 20;
-    const THUMBNAIL_WIDTH = 400;
     const CROP_WIDTH = 300;
     const CROP_HEIGHT = 300;
 
@@ -127,11 +126,14 @@
         const durationInSeconds = convertDurationToSeconds(metadata.Duration);
         const interval = calculateInterval(durationInSeconds, NUM_THUMBNAILS);
 
-        // Generate thumbnails
+        // Generate thumbnails: scale minimally to 300×300 then crop to 300×300
         const thumbnailArgs = [
           '-skip_frame', 'nokey',
           '-i', inputFile,
-          '-vf', `fps=1/${interval},scale=${THUMBNAIL_WIDTH}:-1:flags=bilinear,crop=${CROP_WIDTH}:${CROP_HEIGHT}:(iw-${CROP_WIDTH})/2:(ih-${CROP_HEIGHT})/2`,
+          '-vf',
+            `fps=1/${interval},` +
+            `scale=${CROP_WIDTH}:${CROP_HEIGHT}:force_original_aspect_ratio=increase,` +
+            `crop=${CROP_WIDTH}:${CROP_HEIGHT}`,
           '-flags2', 'fast',
           '-an', '-sn', '-dn',
           thumbnailFile,
@@ -141,7 +143,6 @@
         if (thumbnailErr !== 0) {
           outputLabel.textContent = "Error generating thumbnails. See log above for details.";
         } else {
-          // Thumbnails already generating message shown; just append images
           for (let i = 1; i <= NUM_THUMBNAILS; i++) {
             const thumbnailData = await ffmpeg.readFile(`/thumbnail_${i}.png`);
             const thumbnailURL = URL.createObjectURL(new Blob([thumbnailData.buffer], { type: "image/png" }));
@@ -149,7 +150,7 @@
             img.src = thumbnailURL;
             thumbnailsContainer.appendChild(img);
           }
-          outputLabel.textContent += ` 👍 Completed.`;
+          outputLabel.textContent += " 👍 Completed.";
         }
 
         await ffmpeg.unmount(inputDir);
@@ -160,37 +161,25 @@
       }
     }
 
-    /**
-     * Check video metadata against minimum criteria
-     * @param {Object} meta - metadata containing Duration (s), Framerate ("xx fps"), Resolution ("WxH"), etc.
-     * @returns {boolean}
-     */
     function validateVideo(meta) {
-      // Duration
       const duration = convertDurationToSeconds(meta.Duration);
       if (duration < MIN_DURATION_SECONDS) {
         alert(`Video too short: ${duration}s (min ${MIN_DURATION_SECONDS}s).`);
         return false;
       }
-
-      // FPS
       const fps = parseFloat(meta.Framerate);
       if (fps < MIN_FPS) {
         alert(`Frame rate too low: ${fps} fps (min ${MIN_FPS} fps).`);
         return false;
       }
-
-      // Resolution
       const [w, h] = meta.Resolution.split('x').map(Number);
       if (w < MIN_RES_WIDTH || h < MIN_RES_HEIGHT) {
         alert(`Resolution too low: ${w}x${h} (min ${MIN_RES_WIDTH}x${MIN_RES_HEIGHT}).`);
         return false;
       }
-
       return true;
     }
 
-    // Existing helper functions
     function extractDurationFromLog(log) {
       const regex = /Duration: (\d{2}:\d{2}:\d{2})\.(\d+),/;
       const match = log.match(regex);
@@ -208,19 +197,19 @@
 
     function extractMetadataFromLog(log) {
       const metadata = {};
-      const durationMatch = log.match(/Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/);
-      const bitrateMatch  = log.match(/bitrate: (\d+ kb\/s)/);
-      const resolutionMatch = log.match(/, (\d{3,5}x\d{3,5})/);
-      const framerateMatch = log.match(/(\d+(\.\d+)?) fps/);
-      const videoCodecMatch = log.match(/Video: ([^,]+)/);
-      const audioCodecMatch = log.match(/Audio: ([^,]+)/);
+      const durationMatch    = log.match(/Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/);
+      const bitrateMatch     = log.match(/bitrate: (\d+ kb\/s)/);
+      const resolutionMatch  = log.match(/, (\d{3,5}x\d{3,5})/);
+      const framerateMatch   = log.match(/(\d+(\.\d+)?) fps/);
+      const videoCodecMatch  = log.match(/Video: ([^,]+)/);
+      const audioCodecMatch  = log.match(/Audio: ([^,]+)/);
 
-      if (durationMatch)      metadata.Duration    = `${durationMatch[1]}.${durationMatch[2]}`;
-      if (bitrateMatch)       metadata.Bitrate     = bitrateMatch[1];
-      if (resolutionMatch)    metadata.Resolution  = resolutionMatch[1];
-      if (framerateMatch)     metadata.Framerate   = `${framerateMatch[1]} fps`;
-      if (videoCodecMatch)    metadata['Video Codec'] = videoCodecMatch[1];
-      if (audioCodecMatch)    metadata['Audio Codec'] = audioCodecMatch[1];
+      if (durationMatch)    metadata.Duration     = `${durationMatch[1]}.${durationMatch[2]}`;
+      if (bitrateMatch)     metadata.Bitrate      = bitrateMatch[1];
+      if (resolutionMatch)  metadata.Resolution   = resolutionMatch[1];
+      if (framerateMatch)   metadata.Framerate    = `${framerateMatch[1]} fps`;
+      if (videoCodecMatch)  metadata['Video Codec'] = videoCodecMatch[1];
+      if (audioCodecMatch)  metadata['Audio Codec'] = audioCodecMatch[1];
 
       return metadata;
     }

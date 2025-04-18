@@ -105,23 +105,25 @@
       const inputFile = `${inputDir}/${file.name}`;
 
       try {
+        // Reset UI
         thumbnailsContainer.replaceChildren();
         metadataList.replaceChildren();
         document.getElementById('tty').textContent = '';
         outputLabel.textContent = '';
 
-        outputLabel.textContent = 'Preparing workspace';
+        console.log('Preparing workspace');
         await ffmpeg.createDir(inputDir);
         await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
-        outputLabel.textContent = 'Video file mounted';
+        console.log('Video file mounted');
+
         await ffmpeg.exec(['-hide_banner', '-v', 'info', '-i', inputFile]);
-        outputLabel.textContent = 'Metadata probe complete';
+        console.log('Metadata probe complete');
 
         const logContent = document.getElementById('tty').innerText;
         const metadata = extractMetadataFromLog(logContent);
         displayMetadata(metadata);
 
-        outputLabel.textContent = 'Validating video against minimum requirements';
+        console.log('Validating video against minimum requirements');
         if (!validateVideo(metadata)) {
           outputLabel.textContent = 'Video does not meet the minimum requirements';
           await ffmpeg.unmount(inputDir);
@@ -129,25 +131,23 @@
           return;
         }
 
-        outputLabel.textContent = 'Video is valid. Generating thumbnails';
-
+        console.log('Video is valid. Generating thumbnails');
         const durationInSeconds = convertDurationToSeconds(metadata.Duration);
         const interval = calculateInterval(durationInSeconds, NUM_THUMBNAILS);
         const thumbnailArgs = [
           '-skip_frame', 'nokey',
           '-i', inputFile,
-          '-vf',
-          `fps=1/${interval},scale=${CROP_WIDTH}:${CROP_HEIGHT}:force_original_aspect_ratio=increase,crop=${CROP_WIDTH}:${CROP_HEIGHT}`,
+          '-vf', `fps=1/${interval},scale=${CROP_WIDTH}:${CROP_HEIGHT}:force_original_aspect_ratio=increase,crop=${CROP_WIDTH}:${CROP_HEIGHT}`,
           '-flags2', 'fast', '-an', '-sn', '-dn',
           '/thumbnail_%d.png'
         ];
         const ret = await ffmpeg.exec(thumbnailArgs);
 
         if (ret !== 0) {
-          outputLabel.textContent = 'Error generating thumbnails. See log above for details.';
+          outputLabel.textContent = 'Error generating thumbnails. See console for details.';
+          console.error('Thumbnail generation failed with code', ret);
         } else {
-          outputLabel.textContent = 'Thumbnails generated';
-
+          console.log('Thumbnails generated');
           for (let i = 1; i <= NUM_THUMBNAILS; i++) {
             const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
             const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
@@ -159,7 +159,7 @@
 
         await ffmpeg.unmount(inputDir);
         await ffmpeg.deleteDir(inputDir);
-        outputLabel.textContent = 'Cleaning up';
+        console.log('Cleaning up');
       } catch (error) {
         console.error(error);
         outputLabel.textContent = 'Error extracting segment.';
@@ -193,7 +193,7 @@
       const fps = parseFloat(meta.Framerate);
       if (fps < MIN_FPS) { alert(`Frame rate too low: ${fps} fps (min ${MIN_FPS} fps).`); return false; }
       const [w, h] = meta.Resolution.split('x').map(Number);
-      if (w < MIN_RES_WIDTH || h < MIN_RES_HEIGHT) { alert(`Resolution too low: ${w}x${h} (min ${MIN_RES_WIDTH}x${MIN_RES_HEIGHT}).`); return false; }
+      if (w < MIN_RES_WIDTH || h < MIN_RES_HEIGHT) { alert(`Resolution too low: ${w}x${h} (min ${MIN_RES_WIDTH}:${MIN_RES_HEIGHT}).`); return false; }
       return true;
     }
     function displayMetadata(metadata) {

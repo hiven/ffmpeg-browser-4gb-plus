@@ -3,113 +3,134 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <title>Video Validator (min‑fps / min‑resolution / min‑duration)</title>
+  <title>FFmpeg Validator & Thumbnail Extractor</title>
 
-  <!-- FFmpeg.wasm glue (same CDN or local copy you already use) -->
+  <!-- FFmpeg.wasm glue -->
   <script src="common.js"></script>
-
-  <!-- Bulma for quick styling; optional -->
+  <!-- Bulma CSS -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
 
   <style>
-    #thumbs img{margin:3px;border:1px solid #ddd;border-radius:4px;width:110px}
-    #thumbs{display:flex;overflow-x:auto;padding:8px;border:1px solid #ddd;border-radius:4px}
+    #thumbs img { margin:3px; border:1px solid #ddd; border-radius:4px; width:110px; height:auto; }
+    #thumbs { display:flex; overflow-x:auto; padding:8px; border:1px solid #ddd; border-radius:4px; }
   </style>
 </head>
 <body class="section">
   <div class="container">
-
-    <h1 class="title">FFmpeg Segment Extractor</h1>
+    <h1 class="title">FFmpeg Validator & Thumbnail Extractor</h1>
 
     <div class="field">
       <label class="label">Choose a video file</label>
-      <input class="input" type="file" id="file" accept="video/*">
+      <input class="input" type="file" id="fileInput" accept="video/*">
     </div>
 
-    <button class="button is-primary" id="go" disabled>Run</button>
+    <button class="button is-primary" id="runButton" disabled>Run</button>
 
-    <article class="message is-hidden" id="msg">
+    <article class="message is-hidden mt-4" id="msg">
       <div class="message-body"></div>
     </article>
 
     <div id="thumbs" class="mt-4"></div>
+    <!-- hidden log container for FFmpeg output -->
+    <div id="tty" style="display:none"></div>
   </div>
 
-<script>
-/* ========= CONFIG ========= */
-const MIN_W = 720;          // px
-const MIN_H = 1280;         // px
-const MIN_FPS = 23;         // frames per second
-const MIN_SECS = 3;         // seconds
+  <script>
+  /* ===== CONFIG ===== */
+  const MIN_W = 720, MIN_H = 1280, MIN_FPS = 23, MIN_SECS = 3;
+  const NUM_THUMBNAILS = 20;
+  const THUMBNAIL_WIDTH = 400;
+  const CROP_WIDTH = 300, CROP_HEIGHT = 300;
+  
+  /* ===== BOOTSTRAP ===== */
+  (async()=>{
+    await load();            // from common.js
+    document.getElementById('runButton').disabled = false;
+  })();
 
-/* ========= BOOTSTRAP ========= */
-(async()=>{                 // load FFmpeg once page opens
-  await load();             // from common.js
-  document.getElementById('go').disabled = false;
-})();
-
-/* ========= HELPERS ========= */
-const qs  = sel => document.querySelector(sel);
-const msg = qs('#msg');
-function show(type,text){
-  msg.className = `message is-${type}`;
-  msg.classList.remove('is-hidden');
-  msg.querySelector('.message-body').innerHTML = text;
-}
-
-/* ========= CORE ========= */
-qs('#go').onclick = async () => {
-  const fileInput = qs('#file');
-  if(!fileInput.files.length) return alert('Pick a file first');
-
-  const file  = fileInput.files[0];
-  const name  = file.name;
-  const mount = '/in';
-  const inFile= `${mount}/${name}`;
-
-  // fresh UI state
-  msg.classList.add('is-hidden');
-  qs('#thumbs').innerHTML = '';
-  show('info','Analysing video…');
-
-  try{
-    await ffmpeg.createDir(mount);
-    await ffmpeg.mount('WORKERFS',{files:[file]},mount);
-
-    /* ---- probe only ---- */
-    await ffmpeg.exec(['-hide_banner','-i',inFile]);
-    const log = qs('#tty') ? qs('#tty').innerText : '';   // if you keep a console
-
-    /* ---- extract metadata we need ---- */
-    const res     = (log.match(/, (\d{3,5})x(\d{3,5})/)||[]).slice(1).map(Number);
-    const fps     = parseFloat((log.match(/(\d+(?:\.\d+)?) fps/)||[])[1]);
-    const durTxt  = (log.match(/Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/)||[]).slice(1).join('.');
-    const durSecs = durTxt ? durTxt.split(':').map(Number).reduce((t,v,i)=>t*60+v) : 0;
-
-    const errors = [];
-    if(res.length && (res[0]<MIN_W || res[1]<MIN_H))
-      errors.push(`Resolution is ${res[0]}×${res[1]} — needs at least ${MIN_W}×${MIN_H}.`);
-    if(fps && fps<MIN_FPS)
-      errors.push(`Frame‑rate is ${fps} fps — needs at least ${MIN_FPS} fps.`);
-    if(durSecs && durSecs<MIN_SECS)
-      errors.push(`Clip is ${durSecs.toFixed(1)} s — needs to be at least ${MIN_SECS} s long.`);
-
-    if(errors.length){
-      show('danger','❌&nbsp;Upload blocked:<ul><li>'+errors.join('</li><li>')+'</li></ul>');
-      await ffmpeg.unmount(mount); await ffmpeg.deleteDir(mount);
-      return;
-    }
-
-    show('success','✅&nbsp;Video passed all minimum checks. (Thumbnail generation skipped here)');
-    /* ---- continue with your thumbnail logic if you like ---- */
-
-    await ffmpeg.unmount(mount); await ffmpeg.deleteDir(mount);
-
-  }catch(e){
-    console.error(e);
-    show('danger','⚠️&nbsp;Error processing file.');
+  /* ===== HELPERS ===== */
+  const qs = s => document.querySelector(s);
+  const msg = qs('#msg');
+  function show(type, html) {
+    msg.className = `message is-${type}`;
+    msg.classList.remove('is-hidden');
+    msg.querySelector('.message-body').innerHTML = html;
   }
-};
-</script>
+
+  /* ===== CORE ===== */
+  qs('#runButton').onclick = async () => {
+    const fi = qs('#fileInput');
+    if(!fi.files.length) return alert('Pick a file first');
+
+    const file = fi.files[0];
+    const name = file.name;
+    const MOUNT = '/input';
+    const inPath = `${MOUNT}/${name}`;
+
+    // reset UI
+    show('info','Analysing video…');
+    qs('#thumbs').innerHTML = '';
+
+    try {
+      await ffmpeg.createDir(MOUNT);
+      await ffmpeg.mount('WORKERFS',{files:[file]},MOUNT);
+
+      // probe
+      await ffmpeg.exec(['-hide_banner','-i',inPath]);
+      const log = qs('#tty').innerText;
+
+      // extract metadata
+      const resMatch=log.match(/, (\d{3,5})x(\d{3,5})/)||[];
+      const [w,h]=resMatch.slice(1,3).map(Number);
+      const fps=parseFloat((log.match(/(\d+(?:\.\d+)?) fps/)||[])[1]||0);
+      const durTxt=(log.match(/Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/)||[]).slice(1).join('.')||'';
+      const durSecs=durTxt.split(':').map(Number).reduce((a,b,i)=>a*60+ b,0);
+
+      const errors=[];
+      if(w<MIN_W||h<MIN_H) errors.push(`Resolution is ${w}×${h} — needs ≥ ${MIN_W}×${MIN_H}.`);
+      if(fps<MIN_FPS) errors.push(`Frame-rate is ${fps} fps — needs ≥ ${MIN_FPS} fps.`);
+      if(durSecs<MIN_SECS) errors.push(`Duration is ${durSecs.toFixed(1)} s — needs ≥ ${MIN_SECS} s.`);
+
+      if(errors.length) {
+        show('danger','❌ Upload blocked:<ul><li>'+errors.join('</li><li>')+'</li></ul>');
+        await ffmpeg.unmount(MOUNT); await ffmpeg.deleteDir(MOUNT);
+        return;
+      }
+
+      // passed checks → generate thumbnails
+      show('info','Generating thumbnails…');
+      const interval = durSecs/NUM_THUMBNAILS;
+      await ffmpeg.createDir('/thumbnails');
+      const args = [
+        '-skip_frame','nokey',
+        '-i',inPath,
+        '-vf', `fps=1/${interval},scale=${THUMBNAIL_WIDTH}:-1:flags=bilinear,crop=${CROP_WIDTH}:${CROP_HEIGHT}:(iw-${CROP_WIDTH})/2:(ih-${CROP_HEIGHT})/2`,
+        '-flags2','fast','-an','-sn','-dn',
+        '/thumbnails/thumb_%d.png'
+      ];
+      const code = await ffmpeg.exec(args);
+      if(code!==0) {
+        show('danger','❌ Error generating thumbnails.');
+      } else {
+        for(let i=1; i<=NUM_THUMBNAILS; i++) {
+          const data = await ffmpeg.readFile(`/thumbnails/thumb_${i}.png`);
+          const url = URL.createObjectURL(new Blob([data.buffer],{type:'image/png'}));
+          const img = document.createElement('img'); img.src = url;
+          qs('#thumbs').appendChild(img);
+        }
+        show('success',`✅ Generated ${NUM_THUMBNAILS} thumbnails.`);
+      }
+
+      // cleanup
+      await ffmpeg.unmount(MOUNT);
+      await ffmpeg.deleteDir(MOUNT);
+      await ffmpeg.deleteDir('/thumbnails');
+
+    } catch(err) {
+      console.error(err);
+      show('danger','⚠️ Error processing file.');
+    }
+  };
+  </script>
 </body>
 </html>

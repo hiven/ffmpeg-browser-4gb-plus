@@ -101,7 +101,7 @@
         thumbnailsContainer.replaceChildren();
         metadataList.replaceChildren();
         cleanLog();
-        outputLabel.textContent = "Generating thumbnails, please wait...";
+        outputLabel.textContent = "Probing video, please wait...";
 
         await ffmpeg.createDir(inputDir);
         await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
@@ -120,6 +120,8 @@
           await ffmpeg.unmount(inputDir);
           await ffmpeg.deleteDir(inputDir);
           return;
+        } else {
+          outputLabel.textContent = "✅ Video meets the minimum requirements. Generating thumbnails...";
         }
 
         const durationInSeconds = convertDurationToSeconds(metadata.Duration);
@@ -139,8 +141,7 @@
         if (thumbnailErr !== 0) {
           outputLabel.textContent = "Error generating thumbnails. See log above for details.";
         } else {
-          log("Generating thumbnails...");
-          outputLabel.textContent = "";
+          // Thumbnails already generating message shown; just append images
           for (let i = 1; i <= NUM_THUMBNAILS; i++) {
             const thumbnailData = await ffmpeg.readFile(`/thumbnail_${i}.png`);
             const thumbnailURL = URL.createObjectURL(new Blob([thumbnailData.buffer], { type: "image/png" }));
@@ -148,6 +149,7 @@
             img.src = thumbnailURL;
             thumbnailsContainer.appendChild(img);
           }
+          outputLabel.textContent += ` 👍 Completed.`;
         }
 
         await ffmpeg.unmount(inputDir);

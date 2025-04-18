@@ -131,8 +131,8 @@
           return;
         }
 
-        appendLog("✅ Video is valid. Generating thumbnails…");
-        outputLabel.textContent = "✅ Video meets the minimum requirements. Generating thumbnails…";
+        // Indicate thumbnail generation in outputLabel
+        outputLabel.textContent = "✅ Video is valid. Generating thumbnails…";
 
         const durationInSeconds = convertDurationToSeconds(metadata.Duration);
         const interval          = calculateInterval(durationInSeconds, NUM_THUMBNAILS);
@@ -150,7 +150,9 @@
           appendLog("❌ Error generating thumbnails.");
           outputLabel.textContent = "❌ Error generating thumbnails. See log above for details.";
         } else {
-          appendLog("✅ Thumbnails generated, rendering to page…");
+          // Show generation success in outputLabel instead of tty
+          outputLabel.textContent = "✅ Thumbnails generated, rendering to page…";
+
           for (let i = 1; i <= NUM_THUMBNAILS; i++) {
             const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
             const url  = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
@@ -159,8 +161,8 @@
             thumbnailsContainer.appendChild(img);
           }
 
-          // Show key messages in outputLabel instead of tty
-          outputLabel.textContent += "🎉 All thumbnails displayed.";
+          // Final messages in outputLabel
+          outputLabel.textContent += " 🎉 All thumbnails displayed.";
           outputLabel.textContent += " 🧹 Cleaning up…";
           outputLabel.textContent += " 🗑 Workspace cleared.";
         }
@@ -175,7 +177,7 @@
       }
     }
 
-    // Metadata helpers (unchanged)
+    // Metadata helpers
     function convertDurationToSeconds(d) {
       const [h,m,s] = d.split(':').map(Number);
       return h*3600 + m*60 + s;

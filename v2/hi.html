@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Video Validator (min‑fps / min‑resolution / min‑duration)</title>
+
+  <!-- FFmpeg.wasm glue (same CDN or local copy you already use) -->
+  <script src="common.js"></script>
+
+  <!-- Bulma for quick styling; optional -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+
+  <style>
+    #thumbs img{margin:3px;border:1px solid #ddd;border-radius:4px;width:110px}
+    #thumbs{display:flex;overflow-x:auto;padding:8px;border:1px solid #ddd;border-radius:4px}
+  </style>
+</head>
+<body class="section">
+  <div class="container">
+
+    <h1 class="title">FFmpeg Segment Extractor</h1>
+
+    <div class="field">
+      <label class="label">Choose a video file</label>
+      <input class="input" type="file" id="file" accept="video/*">
+    </div>
+
+    <button class="button is-primary" id="go" disabled>Run</button>
+
+    <article class="message is-hidden" id="msg">
+      <div class="message-body"></div>
+    </article>
+
+    <div id="thumbs" class="mt-4"></div>
+  </div>
+
+<script>
+/* ========= CONFIG ========= */
+const MIN_W = 720;          // px
+const MIN_H = 1280;         // px
+const MIN_FPS = 23;         // frames per second
+const MIN_SECS = 3;         // seconds
+
+/* ========= BOOTSTRAP ========= */
+(async()=>{                 // load FFmpeg once page opens
+  await load();             // from common.js
+  document.getElementById('go').disabled = false;
+})();
+
+/* ========= HELPERS ========= */
+const qs  = sel => document.querySelector(sel);
+const msg = qs('#msg');
+function show(type,text){
+  msg.className = `message is-${type}`;
+  msg.classList.remove('is-hidden');
+  msg.querySelector('.message-body').innerHTML = text;
+}
+
+/* ========= CORE ========= */
+qs('#go').onclick = async () => {
+  const fileInput = qs('#file');
+  if(!fileInput.files.length) return alert('Pick a file first');
+
+  const file  = fileInput.files[0];
+  const name  = file.name;
+  const mount = '/in';
+  const inFile= `${mount}/${name}`;
+
+  // fresh UI state
+  msg.classList.add('is-hidden');
+  qs('#thumbs').innerHTML = '';
+  show('info','Analysing video…');
+
+  try{
+    await ffmpeg.createDir(mount);
+    await ffmpeg.mount('WORKERFS',{files:[file]},mount);
+
+    /* ---- probe only ---- */
+    await ffmpeg.exec(['-hide_banner','-i',inFile]);
+    const log = qs('#tty') ? qs('#tty').innerText : '';   // if you keep a console
+
+    /* ---- extract metadata we need ---- */
+    const res     = (log.match(/, (\d{3,5})x(\d{3,5})/)||[]).slice(1).map(Number);
+    const fps     = parseFloat((log.match(/(\d+(?:\.\d+)?) fps/)||[])[1]);
+    const durTxt  = (log.match(/Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/)||[]).slice(1).join('.');
+    const durSecs = durTxt ? durTxt.split(':').map(Number).reduce((t,v,i)=>t*60+v) : 0;
+
+    const errors = [];
+    if(res.length && (res[0]<MIN_W || res[1]<MIN_H))
+      errors.push(`Resolution is ${res[0]}×${res[1]} — needs at least ${MIN_W}×${MIN_H}.`);
+    if(fps && fps<MIN_FPS)
+      errors.push(`Frame‑rate is ${fps} fps — needs at least ${MIN_FPS} fps.`);
+    if(durSecs && durSecs<MIN_SECS)
+      errors.push(`Clip is ${durSecs.toFixed(1)} s — needs to be at least ${MIN_SECS} s long.`);
+
+    if(errors.length){
+      show('danger','❌&nbsp;Upload blocked:<ul><li>'+errors.join('</li><li>')+'</li></ul>');
+      await ffmpeg.unmount(mount); await ffmpeg.deleteDir(mount);
+      return;
+    }
+
+    show('success','✅&nbsp;Video passed all minimum checks. (Thumbnail generation skipped here)');
+    /* ---- continue with your thumbnail logic if you like ---- */
+
+    await ffmpeg.unmount(mount); await ffmpeg.deleteDir(mount);
+
+  }catch(e){
+    console.error(e);
+    show('danger','⚠️&nbsp;Error processing file.');
+  }
+};
+</script>
+</body>
+</html>

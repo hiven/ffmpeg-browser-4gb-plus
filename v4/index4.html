@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FFmpeg Segment Extractor</title>
+  <script src="common.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css" />
+  <style>
+    #thumbnailsContainer img {
+      display: inline-block;
+      margin: 5px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      width: 120px;
+      height: auto;
+    }
+    #thumbnailsContainer {
+      display: flex;
+      overflow-x: auto;
+      padding: 10px;
+      background: #f5f5f5;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+  <section class="section">
+    <div class="container">
+      <h1 class="title">FFmpeg Segment Extractor</h1>
+
+      <div class="field">
+        <label class="label">Upload a Video File</label>
+        <div class="control">
+          <input class="input" type="file" id="fileInput" accept="video/*" />
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="control">
+          <button class="button is-primary" id="runButton" disabled>Extract Segment</button>
+        </div>
+      </div>
+
+      <div class="box" id="tty" style="height:200px; overflow-y:auto; white-space:pre-wrap;"></div>
+      <div id="outputLabel" class="has-text-weight-bold mt-4"></div>
+
+      <div id="metadataContainer" class="mt-4">
+        <h2 class="subtitle">Video Metadata</h2>
+        <ul id="metadataList"></ul>
+      </div>
+
+      <div id="thumbnailsContainer" class="mt-4"></div>
+    </div>
+  </section>
+
+  <script>
+  (function() {
+    // Configuration
+    const CFG = {
+      THUMBNAILS: 20,
+      CROP: { w: 300, h: 300 },
+      REQUIRE: { fps: 15, res: { w: 640, h: 360 }, duration: 5 }
+    };
+
+    // DOM refs
+    const DOM = {
+      fileInput: document.getElementById('fileInput'),
+      runButton: document.getElementById('runButton'),
+      logBox: document.getElementById('tty'),
+      output: document.getElementById('outputLabel'),
+      metadataList: document.getElementById('metadataList'),
+      thumbs: document.getElementById('thumbnailsContainer')
+    };
+
+    const log = msg => {
+      DOM.logBox.textContent += msg + '\n';
+      DOM.logBox.scrollTop = DOM.logBox.scrollHeight;
+    };
+
+    const resetUI = () => {
+      DOM.logBox.textContent = '';
+      DOM.output.textContent = '';
+      DOM.metadataList.replaceChildren();
+      DOM.thumbs.replaceChildren();
+    };
+
+    async function initFFmpeg() {
+      try {
+        await load(false, ({ received, total }) =>
+          log(`Loading FFmpeg: ${Math.round(received/total*100)}%`)
+        );
+        log('✅ FFmpeg loaded');
+        DOM.runButton.disabled = false;
+      } catch {
+        log('❌ Failed to load FFmpeg');
+        alert('Error loading FFmpeg');
+      }
+    }
+
+    function parseMeta(text) {
+      const m = str => {
+        const r = text.match(new RegExp(str.pattern));
+        return r ? r.map(g => g).filter((_,i)=>i>0).join('') : null;
+      };
+      return {
+        Duration: m({pattern:'Duration: (\d{2}:\d{2}:\d{2}\.\d+)'}),
+        Bitrate: m({pattern:'bitrate: (\d+ kb/s)'}),
+        Resolution: m({pattern:', (\d{3,5}x\d{3,5})'}),
+        Framerate: m({pattern:'(\d+(?:\.\d+)?) fps'}),
+        VideoCodec: m({pattern:'Video: ([^,]+)'}),
+        AudioCodec: m({pattern:'Audio: ([^,]+)'}),
+      };
+    }
+
+    function toSeconds(hms) {
+      const [h,m,s] = hms.split(':').map(Number);
+      return h*3600 + m*60 + s;
+    }
+
+    function validVideo(meta) {
+      const sec = toSeconds(meta.Duration);
+      const fps = parseFloat(meta.Framerate);
+      const [w,h] = meta.Resolution.split('x').map(Number);
+      if(sec < CFG.REQUIRE.duration) return alert(`Too short: ${sec}s`), false;
+      if(fps < CFG.REQUIRE.fps) return alert(`Low fps: ${fps}`), false;
+      if(w<CFG.REQUIRE.res.w||h<CFG.REQUIRE.res.h) return alert(`Low res: ${w}x${h}`), false;
+      return true;
+    }
+
+    function showMeta(meta) {
+      DOM.metadataList.replaceChildren();
+      Object.entries(meta).forEach(([k,v])=>{
+        const li = document.createElement('li');
+        li.textContent = `${k}: ${v}`;
+        DOM.metadataList.appendChild(li);
+      });
+    }
+
+    async function extractThumbnails(inputPath, duration) {
+      const interval = duration / CFG.THUMBNAILS;
+      const vf = `fps=1/${interval},scale=${CFG.CROP.w}:${CFG.CROP.h}:force_original_aspect_ratio=increase,crop=${CFG.CROP.w}:${CFG.CROP.h}`;
+      await ffmpeg.exec([
+        '-skip_frame','nokey','-i',inputPath,'-vf',vf,'-flags2','fast','-an','-sn','-dn',
+        '/thumb_%d.png'
+      ]);
+      for(let i=1;i<=CFG.THUMBNAILS;i++){
+        const data = await ffmpeg.readFile(`/thumb_${i}.png`);
+        const url = URL.createObjectURL(new Blob([data.buffer],{type:'image/png'}));
+        const img = Object.assign(document.createElement('img'),{src:url});
+        DOM.thumbs.appendChild(img);
+      }
+    }
+
+    async function run() {
+      if(!DOM.fileInput.files.length) return alert('Select a file');
+      const file = DOM.fileInput.files[0];
+      const mnt = '/input';
+      const inPath = `${mnt}/${file.name}`;
+
+      resetUI();
+      DOM.output.textContent = 'Preparing workspace...';
+      await ffmpeg.createDir(mnt);
+      await ffmpeg.mount('WORKERFS',{files:[file]},mnt);
+
+      DOM.output.textContent = 'Probing metadata...';
+      await ffmpeg.exec(['-hide_banner','-v','info','-i',inPath]);
+      const logText = DOM.logBox.innerText;
+      const meta = parseMeta(logText);
+      showMeta(meta);
+
+      DOM.output.textContent = 'Validating video...';
+      if(!validVideo(meta)){
+        DOM.output.textContent = 'Validation failed';
+      } else {
+        DOM.output.textContent = 'Generating thumbnails...';
+        await extractThumbnails(inPath, toSeconds(meta.Duration));
+        DOM.output.textContent = 'Done';
+      }
+
+      await ffmpeg.unmount(mnt);
+      await ffmpeg.deleteDir(mnt);
+    }
+
+    DOM.runButton.addEventListener('click',run);
+    initFFmpeg();
+  })();
+  </script>
+</body>
+</html>

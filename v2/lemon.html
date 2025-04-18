@@ -102,13 +102,13 @@ class UI {
   }
 }
 
-// FFmpeg wrapper
+// FFmpeg wrapper uses global ffmpeg from common.js
 class FFmpegService {
-  constructor(engine) { this.ff = engine; }
-  async load(progressCb) { await load(false, progressCb); }
+  constructor() { this.ff = window.ffmpeg; }
+  async load(progressCb) { await window.load(false, progressCb); }
   async mount(file) {
     await this.ff.createDir(CONFIG.INPUT_DIR);
-    await this.ff.mount('WORKERFS',{files:[file]},CONFIG.INPUT_DIR);
+    await this.ff.mount('WORKERFS', { files: [file] }, CONFIG.INPUT_DIR);
     this.input = `${CONFIG.INPUT_DIR}/${file.name}`;
   }
   async probe() {
@@ -118,12 +118,12 @@ class FFmpegService {
   async generate(interval) {
     const vf = `fps=1/${interval},scale=${CONFIG.THUMB.width}:-1:flags=bilinear,`+
                `crop=${CONFIG.THUMB.crop.w}:${CONFIG.THUMB.crop.h}:(iw-${CONFIG.THUMB.crop.w})/2:(ih-${CONFIG.THUMB.crop.h})/2`;
-    const args = ['-skip_frame','nokey','-i',this.input,'-vf',vf,'-flags2','fast','-an','-sn','-dn',CONFIG.THUMB_PATTERN];
+    const args = ['-skip_frame','nokey','-i', this.input, '-vf', vf, '-flags2','fast','-an','-sn','-dn', CONFIG.THUMB_PATTERN];
     if (await this.ff.exec(args) !== 0) throw new Error('Thumbnail generation failed');
     const blobs = [];
-    for (let i=1; i<=CONFIG.NUM_THUMBNAILS; i++) {
-      const data = await this.ff.readFile(CONFIG.THUMB_PATTERN.replace('%d',i));
-      blobs.push(new Blob([data.buffer],{type:'image/png'}));
+    for (let i = 1; i <= CONFIG.NUM_THUMBNAILS; i++) {
+      const data = await this.ff.readFile(CONFIG.THUMB_PATTERN.replace('%d', i));
+      blobs.push(new Blob([data.buffer], { type: 'image/png' }));
     }
     return blobs;
   }
@@ -150,35 +150,41 @@ class VideoExtractor {
       Resolution: /, (\d{3,5}x\d{3,5}),/,
       Framerate: /(\d+(?:\.\d+)?) fps/,
       Video: /Video: ([^,]+)/,
-      Audio: /Audio: ([^,]+)/
+      Audio: /Audio: ([^,]+)
     };
     return Object.fromEntries(Object.entries(pat)
-      .map(([k,r])=>{ const m=r.exec(log); return m?[k,m[1]]:null; })
+      .map(([k, r]) => { const m = r.exec(log); return m ? [k, m[1]] : null; })
       .filter(Boolean)
     );
   }
   checkQuality(meta, dur) {
     const fps = parseFloat(meta.Framerate) || 0;
-    const [w,h] = (meta.Resolution||'0x0').split('x').map(Number);
-    return fps>=CONFIG.MIN_FPS && dur>=CONFIG.MIN_DURATION && w>=CONFIG.MIN_RES.w && h>=CONFIG.MIN_RES.h;
+    const [w, h] = (meta.Resolution || '0x0').split('x').map(Number);
+    return fps >= CONFIG.MIN_FPS && dur >= CONFIG.MIN_DURATION && w >= CONFIG.MIN_RES.w && h >= CONFIG.MIN_RES.h;
   }
   async extract(file) {
-    if(!file) return this.ui.logMsg('No file selected');
+    if (!file) return this.ui.logMsg('No file selected');
     this.ui.clearAll();
     try {
-      this.ui.logMsg('Mounting file...'); await this.svc.mount(file);
-      this.ui.logMsg('Probing metadata...'); const log = await this.svc.probe();
+      this.ui.logMsg('Mounting file...');
+      await this.svc.mount(file);
+
+      this.ui.logMsg('Probing metadata...');
+      const log = await this.svc.probe();
+
       const dur = this.parseDuration(log);
       const meta = this.parseMetadata(log);
       this.ui.renderMetadata(meta);
-      if(!this.checkQuality(meta,dur)) {
+
+      if (!this.checkQuality(meta, dur)) {
         return this.ui.logMsg('❌ Video does not meet quality requirements');
       }
+
       this.ui.logMsg('Generating thumbnails...');
-      const blobs = await this.svc.generate(dur/CONFIG.NUM_THUMBNAILS);
+      const blobs = await this.svc.generate(dur / CONFIG.NUM_THUMBNAILS);
       this.ui.renderThumbnails(blobs);
       this.ui.logMsg('✅ Extraction complete');
-    } catch(err) {
+    } catch (err) {
       this.ui.logMsg(`❌ ${err.message}`);
     } finally {
       await this.svc.cleanup();
@@ -187,13 +193,14 @@ class VideoExtractor {
 }
 
 // Bootstrap
-const ui  = new UI();
-const svc = new FFmpegService(ffmpeg);
+(async () => {
+  const ui = new UI();
+  const svc = new FFmpegService();
 
-// Load and start
-await svc.load(({received,total})=> ui.logMsg(`Loading FFmpeg: ${Math.round(received/total*100)}%`));
-ui.enableBtn();
-ui.onClick(file=> new VideoExtractor(ui,svc).extract(file));
+  await svc.load(({ received, total }) => ui.logMsg(`Loading FFmpeg: ${Math.round(received/total*100)}%`));
+  ui.enableBtn();
+  ui.onClick(file => new VideoExtractor(ui, svc).extract(file));
+})();
 </script>
 </body>
 </html>

@@ -149,7 +149,7 @@
         if (ret !== 0) {
           outputLabel.textContent = "Error generating thumbnails. See log above for details.";
         } else {
-          outputLabel.textContent = "Thumbnails generated, rendering to page…";
+          outputLabel.textContent = "Thumbnails generated";
 
           for (let i = 1; i <= NUM_THUMBNAILS; i++) {
             const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
@@ -158,20 +158,16 @@
             img.src = url;
             thumbnailsContainer.appendChild(img);
           }
-
-          // Final messages in outputLabel
-          outputLabel.textContent += " 🎉 All thumbnails displayed.";
-          outputLabel.textContent += " 🧹 Cleaning up…";
-          outputLabel.textContent += " 🗑 Workspace cleared.";
         }
 
         // Cleanup
         await ffmpeg.unmount(inputDir);
         await ffmpeg.deleteDir(inputDir);
+        outputLabel.textContent = "Cleaning up";
       } catch (error) {
         console.error(error);
-        appendLog("❌ Error extracting segment. See console for details.");
-        outputLabel.textContent = "❌ Error extracting segment. See console for details.";
+        appendLog("Error extracting segment. See console for details.");
+        outputLabel.textContent = "Error extracting segment. See console for details.";
       }
     }
 

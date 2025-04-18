@@ -3,220 +3,195 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FFmpeg Segment Extractor</title>
+  <title>FFmpeg Thumbnail Extractor</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css">
   <style>
-    /* Styles for thumbnails container */
-    #thumbnailsContainer {
-      display: flex;
-      overflow-x: auto;
-      gap: 0.5rem;
-      padding: 1rem;
-      background: #f5f5f5;
-      border: 1px solid #ddd;
-      border-radius: 0.5rem;
+    :root {
+      --gap: 0.5rem;
+      --bg-light: #f5f5f5;
+      --border: #ddd;
+      --radius: 0.5rem;
     }
-    #thumbnailsContainer img {
-      border: 1px solid #ddd;
-      border-radius: 0.25rem;
-      width: 120px;
-      height: auto;
-    }
-    #tty {
-      height: 200px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      background: #fff;
-      border: 1px solid #ddd;
-      padding: 1rem;
-      border-radius: 0.5rem;
-      font-family: monospace;
-    }
+    body { background: #fafafa; }
+    #thumbnails { display: flex; gap: var(--gap); overflow-x: auto; padding: 1rem; background: var(--bg-light); border: 1px solid var(--border); border-radius: var(--radius); }
+    #thumbnails img { border: 1px solid var(--border); border-radius: calc(var(--radius)/2); width: 120px; height: auto; }
+    #log { height: 200px; overflow-y: auto; white-space: pre-wrap; background: #fff; border: 1px solid var(--border); padding: 1rem; border-radius: var(--radius); font-family: monospace; }
   </style>
 </head>
 <body>
   <section class="section">
     <div class="container">
-      <h1 class="title">FFmpeg Segment Extractor</h1>
+      <h1 class="title">FFmpeg Thumbnail Extractor</h1>
+
       <div class="field">
-        <label class="label" for="fileInput">Upload a Video File</label>
+        <label class="label" for="fileInput">Video File</label>
         <div class="control">
           <input class="input" type="file" id="fileInput" accept="video/*">
         </div>
       </div>
+
       <div class="field">
         <div class="control">
-          <button class="button is-primary" id="runButton" disabled>Extract Segment</button>
+          <button class="button is-primary" id="processBtn" disabled>
+            <span id="btnText">Extract</span>
+            <span class="icon is-small is-loading" id="btnLoader" hidden></span>
+          </button>
         </div>
       </div>
-      <div id="tty" class="box"></div>
-      <div id="outputLabel" class="has-text-weight-bold mt-4"></div>
-      <div id="metadataContainer" class="mt-4">
-        <h2 class="subtitle">Video Metadata</h2>
-        <ul id="metadataList"></ul>
+
+      <div id="log" class="box" aria-live="polite"></div>
+      <p id="status" class="has-text-weight-semibold mt-4"></p>
+
+      <div id="metadata" class="mt-4">
+        <h2 class="subtitle">Metadata</h2>
+        <ul id="metaList"></ul>
       </div>
-      <div id="thumbnailsContainer" class="mt-4"></div>
+
+      <div id="thumbnails" class="mt-4"></div>
     </div>
   </section>
+
   <script type="module">
-    // Access FFmpeg and utility functions from common.js
-    const loadFFmpeg = window.load;
-    const ffmpeg = window.ffmpeg;
-    const cleanLogFunc = window.cleanLog;
+    import { load, ffmpeg, cleanLog } from './common.js';
 
-    const NUM_THUMBNAILS = 20;
-    const THUMBNAIL_WIDTH = 400;
-    const CROP_WIDTH = 300;
-    const CROP_HEIGHT = 300;
+    const CFG = {
+      COUNT: 20,
+      WIDTH: 400,
+      CROP: { w: 300, h: 300 }
+    };
 
-    class FfmpegSegmentExtractor {
+    class ThumbnailExtractor {
       constructor() {
-        this.fileInput = document.getElementById('fileInput');
-        this.runButton = document.getElementById('runButton');
-        this.tty = document.getElementById('tty');
-        this.outputLabel = document.getElementById('outputLabel');
-        this.metadataList = document.getElementById('metadataList');
-        this.thumbnailsContainer = document.getElementById('thumbnailsContainer');
+        this.$ = sel => document.querySelector(sel);
+        this.fileInput = this.$('#fileInput');
+        this.processBtn = this.$('#processBtn');
+        this.btnText = this.$('#btnText');
+        this.btnLoader = this.$('#btnLoader');
+        this.logBox = this.$('#log');
+        this.status = this.$('#status');
+        this.metaList = this.$('#metaList');
+        this.thumbContainer = this.$('#thumbnails');
       }
 
       static async init() {
-        const extractor = new FfmpegSegmentExtractor();
-        await extractor.loadFfmpeg();
-        extractor.bindEvents();
+        const app = new ThumbnailExtractor();
+        await app.initFFmpeg();
+        app.bind();
       }
 
-      async loadFfmpeg() {
+      async initFFmpeg() {
         try {
-          await loadFFmpeg(false, ({ received, total }) => {
-            const percent = Math.round((received / total) * 100);
-            this.log(`[FFmpeg] Loading: ${percent}%`);
-          });
-          this.log('[FFmpeg] Loaded successfully');
-          this.runButton.disabled = false;
-        } catch (err) {
-          this.log('[Error] Failed to load FFmpeg');
-          alert('Error loading FFmpeg. Please refresh the page.');
+          await load(false, ({ received, total }) => this.log(`Loading FFmpeg: ${Math.round(received/total*100)}%`));
+          this.log('FFmpeg ready.');
+          this.processBtn.disabled = false;
+        } catch {
+          this.log('❌ Failed to load FFmpeg.');
+          alert('Could not load FFmpeg.');
         }
       }
 
-      bindEvents() {
-        this.runButton.addEventListener('click', () => this.extractThumbnails());
-        this.fileInput.addEventListener('change', () => this.resetUI());
+      bind() {
+        this.fileInput.addEventListener('change', () => this.reset());
+        this.processBtn.addEventListener('click', () => this.run());
       }
 
-      resetUI() {
-        cleanLogFunc();
-        this.tty.textContent = '';
-        this.metadataList.replaceChildren();
-        this.thumbnailsContainer.replaceChildren();
-        this.outputLabel.textContent = '';
+      reset() {
+        cleanLog(); this.logBox.textContent = '';
+        this.status.textContent = '';
+        [this.metaList, this.thumbContainer].forEach(el => el.replaceChildren());
       }
 
-      async extractThumbnails() {
-        if (!this.fileInput.files.length) {
-          alert('Please select a video file.');
-          return;
-        }
+      toggleProcessing(processing) {
+        this.fileInput.disabled = processing;
+        this.processBtn.disabled = processing;
+        this.btnLoader.hidden = !processing;
+        this.btnText.textContent = processing ? 'Working…' : 'Extract';
+      }
+
+      async run() {
+        if (!this.fileInput.files.length) return alert('Select a video.');
+
         const file = this.fileInput.files[0];
-        const inputDir = '/input';
-        const inputFilePath = `${inputDir}/${file.name}`;
-        const thumbnailPattern = '/thumbnail_%d.png';
+        const dir = '/input';
+        const path = `${dir}/${file.name}`;
+        const pattern = '/thumb_%d.png';
 
-        this.resetUI();
-        this.outputLabel.textContent = 'Generating thumbnails, please wait...';
+        this.reset();
+        this.toggleProcessing(true);
+        this.status.textContent = 'Generating thumbnails…';
 
         try {
-          await ffmpeg.createDir(inputDir);
-          await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
-          await ffmpeg.exec(['-hide_banner', '-v', 'info', '-i', inputFilePath]);
-          const logText = this.tty.innerText;
+          await ffmpeg.createDir(dir);
+          await ffmpeg.mount('WORKERFS', { files: [file] }, dir);
 
-          const durationSec = this.getDurationSeconds(logText);
-          const interval = durationSec / NUM_THUMBNAILS;
+          await ffmpeg.exec(['-hide_banner','-i',path]);
+          const logText = this.logBox.innerText;
 
-          const metadata = this.parseMetadata(logText);
-          this.displayMetadata(metadata);
+          const duration = this.getDuration(logText);
+          this.showMetadata(this.parseMetadata(logText));
+          await this.makeThumbs(path, duration/CFG.COUNT, pattern);
+          await this.displayThumbs();
 
-          await this.generateThumbnails(inputFilePath, interval, thumbnailPattern);
-          this.displayThumbnails();
-
-        } catch (err) {
-          console.error(err);
-          this.outputLabel.textContent = '❌ Error extracting segment. Check console for details.';
+        } catch (e) {
+          console.error(e);
+          this.status.textContent = '❌ Error occurred.';
         } finally {
-          await ffmpeg.unmount(inputDir);
-          await ffmpeg.deleteDir(inputDir);
+          this.toggleProcessing(false);
+          ffmpeg.unmount(dir);
+          ffmpeg.deleteDir(dir);
         }
       }
 
-      getDurationSeconds(log) {
-        const match = log.match(/Duration: (\d{2}):(\d{2}):(\d{2})\.(\d+)/);
-        if (!match) return 0;
-        const [hrs, mins, secs] = match.slice(1, 4).map(Number);
-        return hrs * 3600 + mins * 60 + secs;
+      log(msg) {
+        this.logBox.textContent += msg + '\n';
+        this.logBox.scrollTop = this.logBox.scrollHeight;
+      }
+
+      getDuration(log) {
+        const m = log.match(/Duration: (\d{2}):(\d{2}):(\d{2})\./);
+        const [h,mn,s] = m?.slice(1,4).map(Number) || [0,0,0];
+        return h*3600 + mn*60 + s;
       }
 
       parseMetadata(log) {
-        const patterns = {
-          'Duration': /Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/,
-          'Bitrate': /bitrate: (\d+ kb\/s)/,
-          'Resolution': /, (\d{3,5}x\d{3,5}),/,
-          'Framerate': /(\d+(\.\d+)?) fps/,
+        const R = {
+          Duration: /Duration: (\d{2}:\d{2}:\d{2})\./,
+          Bitrate: /bitrate: (\d+ kb\/s)/,
+          Resolution: /, (\d+x\d+),/,
+          Framerate: /(\d+(?:\.\d+)?) fps/,
           'Video Codec': /Video: ([^,]+)/,
-          'Audio Codec': /Audio: ([^,]+)/,
+          'Audio Codec': /Audio: ([^,]+)/
         };
-        const meta = {};
-        for (const [key, regex] of Object.entries(patterns)) {
-          const m = log.match(regex);
-          if (m) meta[key] = key === 'Duration' ? `${m[1]}.${m[2]}` : m[1];
-        }
-        return meta;
+        return Object.fromEntries(Object.entries(R).map(([k,r]) => [k, (log.match(r)||[])[1]]).filter(([,v])=>v));
       }
 
-      displayMetadata(meta) {
-        this.metadataList.replaceChildren();
-        for (const [key, value] of Object.entries(meta)) {
-          const li = document.createElement('li');
-          li.textContent = `${key}: ${value}`;
-          this.metadataList.appendChild(li);
-        }
+      showMetadata(data) {
+        this.metaList.replaceChildren();
+        Object.entries(data).forEach(([k,v]) => {
+          const li = document.createElement('li'); li.textContent = `${k}: ${v}`;
+          this.metaList.appendChild(li);
+        });
       }
 
-      async generateThumbnails(input, interval, outputPattern) {
-        const args = [
-          '-hide_banner',
-          '-skip_frame', 'nokey',
-          '-i', input,
-          '-vf', `fps=1/${interval},scale=${THUMBNAIL_WIDTH}:-1:flags=bilinear,crop=${CROP_WIDTH}:${CROP_HEIGHT}:(iw-${CROP_WIDTH})/2:(ih-${CROP_HEIGHT})/2`,
-          '-flags2', 'fast',
-          '-an', '-sn', '-dn',
-          outputPattern,
-        ];
-        const code = await ffmpeg.exec(args);
-        if (code !== 0) throw new Error('FFmpeg thumbnail generation failed');
+      async makeThumbs(input, interval, pattern) {
+        const vf = [`fps=1/${interval}`, `scale=${CFG.WIDTH}:-1:flags=bilinear`, `crop=${CFG.CROP.w}:${CFG.CROP.h}:(iw-${CFG.CROP.w})/2:(ih-${CFG.CROP.h})/2`].join(',');
+        const args = ['-hide_banner','-skip_frame','nokey','-i',input,'-vf',vf,'-an','-sn','-dn',pattern];
+        if (await ffmpeg.exec(args)) throw new Error('Thumbnail failed');
       }
 
-      displayThumbnails() {
-        this.thumbnailsContainer.replaceChildren();
-        for (let i = 1; i <= NUM_THUMBNAILS; i++) {
-          const data = ffmpeg.readFile(`/thumbnail_${i}.png`);
-          const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
-          const img = document.createElement('img');
-          img.src = url;
-          this.thumbnailsContainer.appendChild(img);
-        }
-        this.outputLabel.textContent = '';
-      }
-
-      log(message) {
-        // Append to terminal and console
-        this.tty.textContent += message + '\n';
-        this.tty.scrollTop = this.tty.scrollHeight;
-        console.log(message);
+      async displayThumbs() {
+        const frag=document.createDocumentFragment();
+        const reads=Array.from({length:CFG.COUNT},(_,i)=>ffmpeg.readFile(`/thumb_${i+1}.png`));
+        (await Promise.all(reads)).forEach(file=>{
+          const img=new Image(); img.src=URL.createObjectURL(new Blob([file.buffer],{type:'image/png'}));
+          frag.appendChild(img);
+        });
+        this.thumbContainer.appendChild(frag);
+        this.status.textContent='';
       }
     }
 
-    document.addEventListener('DOMContentLoaded', () => FfmpegSegmentExtractor.init());
+    document.addEventListener('DOMContentLoaded', ()=>ThumbnailExtractor.init());
   </script>
 </body>
 </html>

@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FFmpeg Segment Extractor</title>
+  <script src="common.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css"/>
+  <style>
+    #thumbnailsContainer img {
+      display: inline-block;
+      margin: 5px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      width: 120px;
+      height: auto;
+    }
+    #thumbnailsContainer {
+      display: flex;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding: 10px;
+      background-color: #f5f5f5;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+  <section class="section">
+    <div class="container">
+      <h1 class="title">FFmpeg Segment Extractor</h1>
+
+      <div class="field">
+        <label class="label">Upload a Video File</label>
+        <div class="control">
+          <input class="input" type="file" id="fileInput" accept="video/*"/>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="control">
+          <button class="button is-primary" id="runButton" disabled>Extract Segment</button>
+        </div>
+      </div>
+
+      <div class="box" id="tty" style="height: 200px; overflow-y: auto;"></div>
+      <div id="outputLabel" class="has-text-weight-bold mt-4"></div>
+
+      <div id="metadataContainer" class="mt-4">
+        <h2 class="subtitle">Video Metadata</h2>
+        <ul id="metadataList"></ul>
+      </div>
+
+      <div id="thumbnailsContainer" class="mt-4"></div>
+    </div>
+  </section>
+
+  <script>
+    const NUM_THUMBNAILS = 20;
+    const THUMBNAIL_WIDTH = 400;
+    const CROP_WIDTH = 300;
+    const CROP_HEIGHT = 300;
+
+    // —— Quality thresholds — adjust as needed
+    const MIN_DURATION    = 5;      // seconds
+    const MIN_FPS         = 24;     // frames per second
+    const MIN_RES_WIDTH   = 640;    // pixels
+    const MIN_RES_HEIGHT  = 480;    // pixels
+
+    async function initializeFFmpeg() {
+      try {
+        await load(false, progress => {
+          console.log(`Loading FFmpeg: ${Math.round((progress.received / progress.total) * 100)}%`);
+        });
+        console.log("FFmpeg loaded successfully");
+        document.getElementById('runButton').disabled = false;
+      } catch (error) {
+        console.error("Failed to load FFmpeg", error);
+        alert("Error loading FFmpeg.");
+      }
+    }
+
+    async function runCommand() {
+      const fileInput = document.getElementById('fileInput');
+      const outputLabel = document.getElementById('outputLabel');
+      const thumbnailsContainer = document.getElementById('thumbnailsContainer');
+      const metadataList = document.getElementById("metadataList");
+
+      if (!fileInput.files.length) {
+        alert('Please select a file.');
+        return;
+      }
+
+      const file = fileInput.files[0];
+      const inputDir = '/input';
+      const inputFile = `${inputDir}/${file.name}`;
+      const thumbnailFile = '/thumbnail_%d.png';
+
+      // helper to unmount & delete input dir
+      async function cleanup() {
+        await ffmpeg.unmount(inputDir);
+        await ffmpeg.deleteDir(inputDir);
+      }
+
+      try {
+        // reset UI
+        thumbnailsContainer.replaceChildren();
+        metadataList.replaceChildren();
+        cleanLog();
+        outputLabel.textContent = "Generating thumbnails, please wait...";
+
+        // mount file
+        await ffmpeg.createDir(inputDir);
+        await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
+
+        // —— PROBE now writes to null to avoid missing-output error
+        await ffmpeg.exec([
+          '-hide_banner','-v','info',
+          '-i', inputFile,
+          '-f','null','-'
+        ]);
+        const logContent = document.getElementById('tty').innerText;
+
+        // extract & display metadata
+        const durationStr = extractDurationFromLog(logContent);
+        const durationInSeconds = convertDurationToSeconds(durationStr);
+        const metadata = extractMetadataFromLog(logContent);
+        displayMetadata(metadata);
+
+        // —— Quality checks —— 
+        const fpsValue = metadata["Framerate"] ? parseFloat(metadata["Framerate"]) : 0;
+        const [width, height] = metadata["Resolution"]
+          ? metadata["Resolution"].split('x').map(Number)
+          : [0, 0];
+
+        if (durationInSeconds < MIN_DURATION) {
+          outputLabel.textContent =
+            `❌ Video too short (${durationInSeconds}s < ${MIN_DURATION}s).`;
+          await cleanup();
+          return;
+        }
+        if (fpsValue < MIN_FPS) {
+          outputLabel.textContent =
+            `❌ Framerate too low (${fpsValue} fps < ${MIN_FPS} fps).`;
+          await cleanup();
+          return;
+        }
+        if (width < MIN_RES_WIDTH || height < MIN_RES_HEIGHT) {
+          outputLabel.textContent =
+            `❌ Resolution too low (${width}×${height} < ${MIN_RES_WIDTH}×${MIN_RES_HEIGHT}).`;
+          await cleanup();
+          return;
+        }
+        // — end quality checks —
+
+        // calculate interval and generate thumbnails
+        const interval = calculateInterval(durationInSeconds, NUM_THUMBNAILS);
+        const thumbnailArgs = [
+          '-skip_frame','nokey',
+          '-i', inputFile,
+          '-vf', `fps=1/${interval},scale=${THUMBNAIL_WIDTH}:-1:flags=bilinear,crop=${CROP_WIDTH}:${CROP_HEIGHT}:(iw-${CROP_WIDTH})/2:(ih-${CROP_HEIGHT})/2`,
+          '-flags2','fast',
+          '-an','-sn','-dn',
+          thumbnailFile
+        ];
+        const thumbnailErr = await ffmpeg.exec(thumbnailArgs);
+
+        if (thumbnailErr !== 0) {
+          outputLabel.textContent = "Error generating thumbnails. See log above.";
+        } else {
+          log("Thumbnails generated:");
+          outputLabel.textContent = "";
+          for (let i = 1; i <= NUM_THUMBNAILS; i++) {
+            const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
+            const url = URL.createObjectURL(new Blob([data.buffer], { type: "image/png" }));
+            const img = document.createElement('img');
+            img.src = url;
+            thumbnailsContainer.appendChild(img);
+          }
+        }
+
+        await cleanup();
+      } catch (error) {
+        console.error(error);
+        outputLabel.textContent = "❌ Error extracting segment. See console.";
+      }
+    }
+
+    // ——— Helper functions ———
+
+    function extractDurationFromLog(log) {
+      const regex = /Duration: (\d{2}):(\d{2}):(\d{2})\.(\d+),/;
+      const m = log.match(regex);
+      return m ? `${m[1]}:${m[2]}:${m[3]}.${m[4]}` : '00:00:00.000';
+    }
+
+    function convertDurationToSeconds(duration) {
+      const [h, m, s] = duration.split(':');
+      const secs = parseInt(h)*3600 + parseInt(m)*60 + parseFloat(s);
+      return Math.round(secs);
+    }
+
+    function calculateInterval(durationSec, count) {
+      return (durationSec / count).toFixed(2);
+    }
+
+    function extractMetadataFromLog(log) {
+      const md = {};
+      const d = log.match(/Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/);
+      const b = log.match(/bitrate:\s*([\d\.]+\s*kb\/s)/i);
+      const r = log.match(/, (\d{2,5}x\d{2,5})[, ]/);
+      const f = log.match(/, (\d+(\.\d+)?) fps/);
+      const vc = log.match(/Video:\s*([^,]+)/);
+      const ac = log.match(/Audio:\s*([^,]+)/);
+
+      if (d) md["Duration"]   = `${d[1]}.${d[2]}`;
+      if (b) md["Bitrate"]    = b[1];
+      if (r) md["Resolution"] = r[1];
+      if (f) md["Framerate"]  = `${f[1]}`;
+      if (vc) md["Video Codec"] = vc[1];
+      if (ac) md["Audio Codec"] = ac[1];
+      return md;
+    }
+
+    function displayMetadata(metadata) {
+      const ul = document.getElementById("metadataList");
+      ul.replaceChildren();
+      for (const [k,v] of Object.entries(metadata)) {
+        const li = document.createElement("li");
+        li.textContent = `${k}: ${v}`;
+        ul.appendChild(li);
+      }
+    }
+
+    // wire up
+    document.getElementById('runButton').addEventListener('click', runCommand);
+    initializeFFmpeg();
+  </script>
+</body>
+</html>

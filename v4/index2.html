@@ -108,30 +108,32 @@
         metadataList.replaceChildren();
         document.getElementById('tty').textContent = '';
         outputLabel.textContent = '';
-        appendLog("📂 Preparing workspace…");
+
+        // Status updates in outputLabel
+        outputLabel.textContent = "📂 Preparing workspace…";
 
         // Mount and probe
         await ffmpeg.createDir(inputDir);
         await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
-        appendLog("✔ Video file mounted");
-        appendLog("🔍 Probing video metadata…");
+        outputLabel.textContent += " ✔ Video file mounted";
+
+        outputLabel.textContent += " 🔍 Probing video metadata…";
         await ffmpeg.exec(['-hide_banner','-v','info','-i', inputFile]);
-        appendLog("✔ Metadata probe complete");
+        outputLabel.textContent += " ✔ Metadata probe complete";
 
         const logContent = document.getElementById('tty').innerText;
         const metadata   = extractMetadataFromLog(logContent);
         displayMetadata(metadata);
 
-        appendLog("⚙️ Validating video against minimum requirements…");
+        outputLabel.textContent += " ⚙️ Validating video against minimum requirements…";
         if (!validateVideo(metadata)) {
-          appendLog("❌ Video does not meet the minimum requirements.");
           outputLabel.textContent = "❌ Video does not meet the minimum requirements.";
           await ffmpeg.unmount(inputDir);
           await ffmpeg.deleteDir(inputDir);
           return;
         }
 
-        // Indicate thumbnail generation in outputLabel
+        // Indicate thumbnail generation
         outputLabel.textContent = "✅ Video is valid. Generating thumbnails…";
 
         const durationInSeconds = convertDurationToSeconds(metadata.Duration);
@@ -147,10 +149,8 @@
         const ret = await ffmpeg.exec(thumbnailArgs);
 
         if (ret !== 0) {
-          appendLog("❌ Error generating thumbnails.");
           outputLabel.textContent = "❌ Error generating thumbnails. See log above for details.";
         } else {
-          // Show generation success in outputLabel instead of tty
           outputLabel.textContent = "✅ Thumbnails generated, rendering to page…";
 
           for (let i = 1; i <= NUM_THUMBNAILS; i++) {
@@ -167,7 +167,7 @@
           outputLabel.textContent += " 🗑 Workspace cleared.";
         }
 
-        // Final cleanup
+        // Cleanup
         await ffmpeg.unmount(inputDir);
         await ffmpeg.deleteDir(inputDir);
       } catch (error) {

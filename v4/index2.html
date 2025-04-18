@@ -114,8 +114,6 @@
         await ffmpeg.createDir(inputDir);
         await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
         outputLabel.textContent = "Video file mounted";
-
-        outputLabel.textContent = "Probing video metadata";
         await ffmpeg.exec(['-hide_banner','-v','info','-i', inputFile]);
         outputLabel.textContent = "Metadata probe complete";
 
@@ -166,8 +164,7 @@
         outputLabel.textContent = "Cleaning up";
       } catch (error) {
         console.error(error);
-        appendLog("Error extracting segment. See console for details.");
-        outputLabel.textContent = "Error extracting segment. See console for details.";
+        outputLabel.textContent = "Error extracting segment.";
       }
     }
 

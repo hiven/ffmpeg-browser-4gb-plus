@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FFmpeg Segment Extractor</title>
+  <script src="common.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css"/>
+  <style>
+    #thumbnailsContainer img {
+      margin: 5px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      width: 120px;
+      height: auto;
+    }
+    #thumbnailsContainer {
+      display: flex;
+      overflow-x: auto;
+      padding: 10px;
+      background: #f5f5f5;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+<section class="section">
+  <div class="container">
+    <h1 class="title">FFmpeg Segment Extractor</h1>
+    <div class="field">
+      <label class="label" for="fileInput">Upload a Video File</label>
+      <div class="control">
+        <input id="fileInput" class="input" type="file" accept="video/*">
+      </div>
+    </div>
+    <div class="field">
+      <div class="control">
+        <button id="extractButton" class="button is-primary" disabled>Extract Segment</button>
+      </div>
+    </div>
+    <div id="tty" class="box" style="height:200px;overflow-y:auto;"></div>
+    <div id="statusMessage" class="has-text-weight-bold mt-4"></div>
+    <div id="metadataContainer" class="mt-4">
+      <h2 class="subtitle">Video Metadata</h2>
+      <ul id="metadataList"></ul>
+    </div>
+    <div id="thumbnailsContainer" class="mt-4"></div>
+  </div>
+</section>
+
+<script type="module">
+// Configuration
+const CONFIG = {
+  INPUT_DIR: '/input',
+  THUMB_PATTERN: '/thumbnail_%d.png',
+  NUM_THUMBNAILS: 20,
+  MIN_FPS: 24,
+  MIN_DURATION: 10, // seconds
+  MIN_RES: { w: 640, h: 480 },
+  THUMB: { width: 400, crop: { w: 300, h: 300 } }
+};
+
+// UI utility
+class UI {
+  constructor() {
+    this.el = {
+      file: document.getElementById('fileInput'),
+      btn:  document.getElementById('extractButton'),
+      log:  document.getElementById('tty'),
+      status: document.getElementById('statusMessage'),
+      meta: document.getElementById('metadataList'),
+      thumbs: document.getElementById('thumbnailsContainer')
+    };
+  }
+  enableBtn() { this.el.btn.disabled = false; }
+  onClick(fn) { this.el.btn.addEventListener('click', () => fn(this.el.file.files[0])); }
+  clearAll() {
+    [this.el.log, this.el.meta, this.el.thumbs].forEach(c => c.replaceChildren());
+    this.updateStatus('');
+  }
+  logMsg(msg) {
+    const p = document.createElement('p'); p.textContent = msg;
+    this.el.log.appendChild(p);
+    this.el.log.scrollTop = this.el.log.scrollHeight;
+    this.updateStatus(msg);
+  }
+  updateStatus(msg) { this.el.status.textContent = msg; }
+  renderMetadata(data) {
+    this.el.meta.replaceChildren();
+    Object.entries(data).forEach(([k,v]) => {
+      const li = document.createElement('li'); li.textContent = `${k}: ${v}`;
+      this.el.meta.appendChild(li);
+    });
+  }
+  renderThumbnails(blobs) {
+    blobs.forEach(b => {
+      const img = new Image();
+      img.src = URL.createObjectURL(b);
+      this.el.thumbs.appendChild(img);
+    });
+  }
+}
+
+// FFmpeg wrapper
+class FFmpegService {
+  constructor(engine) { this.ff = engine; }
+  async load(progressCb) { await load(false, progressCb); }
+  async mount(file) {
+    await this.ff.createDir(CONFIG.INPUT_DIR);
+    await this.ff.mount('WORKERFS',{files:[file]},CONFIG.INPUT_DIR);
+    this.input = `${CONFIG.INPUT_DIR}/${file.name}`;
+  }
+  async probe() {
+    await this.ff.exec(['-hide_banner','-v','info','-i', this.input]);
+    return document.getElementById('tty').innerText;
+  }
+  async generate(interval) {
+    const vf = `fps=1/${interval},scale=${CONFIG.THUMB.width}:-1:flags=bilinear,`+
+               `crop=${CONFIG.THUMB.crop.w}:${CONFIG.THUMB.crop.h}:(iw-${CONFIG.THUMB.crop.w})/2:(ih-${CONFIG.THUMB.crop.h})/2`;
+    const args = ['-skip_frame','nokey','-i',this.input,'-vf',vf,'-flags2','fast','-an','-sn','-dn',CONFIG.THUMB_PATTERN];
+    if (await this.ff.exec(args) !== 0) throw new Error('Thumbnail generation failed');
+    const blobs = [];
+    for (let i=1; i<=CONFIG.NUM_THUMBNAILS; i++) {
+      const data = await this.ff.readFile(CONFIG.THUMB_PATTERN.replace('%d',i));
+      blobs.push(new Blob([data.buffer],{type:'image/png'}));
+    }
+    return blobs;
+  }
+  async cleanup() {
+    await this.ff.unmount(CONFIG.INPUT_DIR);
+    await this.ff.deleteDir(CONFIG.INPUT_DIR);
+  }
+}
+
+// Core extractor
+class VideoExtractor {
+  constructor(ui, service) {
+    this.ui = ui;
+    this.svc = service;
+  }
+  parseDuration(log) {
+    const m = /Duration: (\d{2}):(\d{2}):(\d{2})/.exec(log);
+    return m ? (+m[1]*3600 + +m[2]*60 + +m[3]) : 0;
+  }
+  parseMetadata(log) {
+    const pat = {
+      Duration: /Duration: (\d{2}:\d{2}:\d{2}\.\d+)/,
+      Bitrate: /bitrate: (\d+ kb\/s)/,
+      Resolution: /, (\d{3,5}x\d{3,5}),/,
+      Framerate: /(\d+(?:\.\d+)?) fps/,
+      Video: /Video: ([^,]+)/,
+      Audio: /Audio: ([^,]+)/
+    };
+    return Object.fromEntries(Object.entries(pat)
+      .map(([k,r])=>{ const m=r.exec(log); return m?[k,m[1]]:null; })
+      .filter(Boolean)
+    );
+  }
+  checkQuality(meta, dur) {
+    const fps = parseFloat(meta.Framerate) || 0;
+    const [w,h] = (meta.Resolution||'0x0').split('x').map(Number);
+    return fps>=CONFIG.MIN_FPS && dur>=CONFIG.MIN_DURATION && w>=CONFIG.MIN_RES.w && h>=CONFIG.MIN_RES.h;
+  }
+  async extract(file) {
+    if(!file) return this.ui.logMsg('No file selected');
+    this.ui.clearAll();
+    try {
+      this.ui.logMsg('Mounting file...'); await this.svc.mount(file);
+      this.ui.logMsg('Probing metadata...'); const log = await this.svc.probe();
+      const dur = this.parseDuration(log);
+      const meta = this.parseMetadata(log);
+      this.ui.renderMetadata(meta);
+      if(!this.checkQuality(meta,dur)) {
+        return this.ui.logMsg('❌ Video does not meet quality requirements');
+      }
+      this.ui.logMsg('Generating thumbnails...');
+      const blobs = await this.svc.generate(dur/CONFIG.NUM_THUMBNAILS);
+      this.ui.renderThumbnails(blobs);
+      this.ui.logMsg('✅ Extraction complete');
+    } catch(err) {
+      this.ui.logMsg(`❌ ${err.message}`);
+    } finally {
+      await this.svc.cleanup();
+    }
+  }
+}
+
+// Bootstrap
+const ui  = new UI();
+const svc = new FFmpegService(ffmpeg);
+
+// Load and start
+await svc.load(({received,total})=> ui.logMsg(`Loading FFmpeg: ${Math.round(received/total*100)}%`));
+ui.enableBtn();
+ui.onClick(file=> new VideoExtractor(ui,svc).extract(file));
+</script>
+</body>
+</html>

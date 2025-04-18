@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FFmpeg Segment Extractor</title>
+  <script src="common.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css"/>
+  <style>
+    #thumbnailsContainer img {
+      display: inline-block;
+      margin: 5px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      width: 120px;
+      height: auto;
+    }
+    #thumbnailsContainer {
+      display: flex;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding: 10px;
+      background-color: #f5f5f5;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+  <section class="section">
+    <div class="container">
+      <h1 class="title">FFmpeg Segment Extractor</h1>
+
+      <div class="field">
+        <label class="label">Upload a Video File</label>
+        <div class="control">
+          <input class="input" type="file" id="fileInput" accept="video/*"/>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="control">
+          <button class="button is-primary" id="runButton" disabled>Extract Segment</button>
+        </div>
+      </div>
+
+      <div id="outputLabel" class="has-text-weight-bold mt-4"></div>
+
+      <div id="metadataContainer" class="mt-4">
+        <h2 class="subtitle">Video Metadata</h2>
+        <ul id="metadataList"></ul>
+      </div>
+
+      <div id="thumbnailsContainer" class="mt-4"></div>
+    </div>
+  </section>
+
+  <script>
+    const NUM_THUMBNAILS      = 20;
+    const CROP_WIDTH          = 300;
+    const CROP_HEIGHT         = 300;
+
+    // Minimum requirements
+    const MIN_FPS             = 15;
+    const MIN_RES_WIDTH       = 640;
+    const MIN_RES_HEIGHT      = 360;
+    const MIN_DURATION_SECONDS= 5;
+
+    async function initializeFFmpeg() {
+      try {
+        await load(false, progress => {
+          const pct = Math.round((progress.received / progress.total) * 100);
+          console.log(`Loading FFmpeg: ${pct}%`);
+        });
+        console.log("✅ FFmpeg loaded successfully");
+        document.getElementById('runButton').disabled = false;
+      } catch (error) {
+        console.error("❌ Failed to load FFmpeg", error);
+        alert("Error loading FFmpeg.");
+      }
+    }
+
+    async function runCommand() {
+      const fileInput           = document.getElementById('fileInput');
+      const outputLabel         = document.getElementById('outputLabel');
+      const thumbnailsContainer = document.getElementById('thumbnailsContainer');
+      const metadataList        = document.getElementById('metadataList');
+
+      if (!fileInput.files.length) {
+        alert('Please select a file.');
+        return;
+      }
+
+      const file          = fileInput.files[0];
+      const inputDir      = '/input';
+      const inputFile     = `${inputDir}/${file.name}`;
+      const thumbnailFile = '/thumbnail_%d.png';
+
+      try {
+        // Clear UI
+        thumbnailsContainer.replaceChildren();
+        metadataList.replaceChildren();
+        outputLabel.textContent = '';
+
+        console.log("📂 Preparing workspace…");
+
+        // Mount the file
+        await ffmpeg.createDir(inputDir);
+        await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
+        console.log("✔ Video file mounted");
+
+        // Probe for metadata
+        console.log("🔍 Probing video metadata…");
+        await ffmpeg.exec(['-hide_banner', '-v', 'info', '-i', inputFile]);
+        console.log("✔ Metadata probe complete");
+
+        // Read the FFmpeg log out of the console buffer
+        // (assuming common.js routes ffmpeg output there)
+        const logContent = common.getLastLog();  
+        const metadata   = extractMetadataFromLog(logContent);
+        displayMetadata(metadata);
+
+        // Validate video
+        console.log("⚙️ Validating video against minimum requirements…");
+        const valid = validateVideo(metadata);
+        if (!valid) {
+          console.log("❌ Video does not meet the minimum requirements.");
+          outputLabel.textContent = "❌ Video does not meet the minimum requirements.";
+          await ffmpeg.unmount(inputDir);
+          await ffmpeg.deleteDir(inputDir);
+          return;
+        }
+
+        console.log("✅ Video is valid. Generating thumbnails…");
+        outputLabel.textContent = "✅ Video meets the minimum requirements. Generating thumbnails…";
+
+        // Generate thumbnails
+        const durationInSeconds = convertDurationToSeconds(metadata.Duration);
+        const interval = calculateInterval(durationInSeconds, NUM_THUMBNAILS);
+        const args = [
+          '-skip_frame', 'nokey',
+          '-i', inputFile,
+          '-vf',
+            `fps=1/${interval},` +
+            `scale=${CROP_WIDTH}:${CROP_HEIGHT}:force_original_aspect_ratio=increase,` +
+            `crop=${CROP_WIDTH}:${CROP_HEIGHT}`,
+          '-flags2', 'fast',
+          '-an', '-sn', '-dn',
+          thumbnailFile,
+        ];
+        const err = await ffmpeg.exec(args);
+
+        if (err !== 0) {
+          console.error("❌ Error generating thumbnails");
+          outputLabel.textContent = "Error generating thumbnails. See console for details.";
+        } else {
+          console.log("✅ Thumbnails generated, rendering to page…");
+          for (let i = 1; i <= NUM_THUMBNAILS; i++) {
+            const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
+            const url  = URL.createObjectURL(new Blob([data.buffer], { type: "image/png" }));
+            const img  = document.createElement('img');
+            img.src = url;
+            thumbnailsContainer.appendChild(img);
+          }
+          console.log("🎉 All thumbnails displayed.");
+          outputLabel.textContent += " 👍 Completed.";
+        }
+
+        // Cleanup
+        console.log("🧹 Cleaning up…");
+        await ffmpeg.unmount(inputDir);
+        await ffmpeg.deleteDir(inputDir);
+        console.log("🗑 Workspace cleared.");
+      } catch (error) {
+        console.error("❌ Error extracting segment. See console for details.", error);
+        outputLabel.textContent = "❌ Error extracting segment. See console for details.";
+      }
+    }
+
+    function validateVideo(meta) {
+      const duration = convertDurationToSeconds(meta.Duration);
+      if (duration < MIN_DURATION_SECONDS) {
+        alert(`Video too short: ${duration}s (min ${MIN_DURATION_SECONDS}s).`);
+        return false;
+      }
+      const fps = parseFloat(meta.Framerate);
+      if (fps < MIN_FPS) {
+        alert(`Frame rate too low: ${fps} fps (min ${MIN_FPS} fps).`);
+        return false;
+      }
+      const [w, h] = meta.Resolution.split('x').map(Number);
+      if (w < MIN_RES_WIDTH || h < MIN_RES_HEIGHT) {
+        alert(`Resolution too low: ${w}x${h} (min ${MIN_RES_WIDTH}x${MIN_RES_HEIGHT}).`);
+        return false;
+      }
+      return true;
+    }
+
+    function extractMetadataFromLog(log) {
+      const metadata = {};
+      const durM  = log.match(/Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/);
+      const brM   = log.match(/bitrate: (\d+ kb\/s)/);
+      const resM  = log.match(/, (\d{3,5}x\d{3,5})/);
+      const fpsM  = log.match(/(\d+(\.\d+)?) fps/);
+      const vcm   = log.match(/Video: ([^,]+)/);
+      const acm   = log.match(/Audio: ([^,]+)/);
+
+      if (durM) metadata.Duration      = `${durM[1]}.${durM[2]}`;
+      if (brM)  metadata.Bitrate       = brM[1];
+      if (resM) metadata.Resolution    = resM[1];
+      if (fpsM) metadata.Framerate     = `${fpsM[1]} fps`;
+      if (vcm)  metadata['Video Codec']= vcm[1];
+      if (acm)  metadata['Audio Codec']= acm[1];
+
+      return metadata;
+    }
+
+    function displayMetadata(meta) {
+      const list = document.getElementById("metadataList");
+      list.replaceChildren();
+      for (const [k, v] of Object.entries(meta)) {
+        const li = document.createElement('li');
+        li.textContent = `${k}: ${v}`;
+        list.appendChild(li);
+      }
+    }
+
+    function convertDurationToSeconds(dur) {
+      const [h, m, s] = dur.split(':').map(Number);
+      return h*3600 + m*60 + s;
+    }
+
+    function calculateInterval(totalSec, count) {
+      return totalSec / count;
+    }
+
+    document.getElementById('runButton').addEventListener('click', runCommand);
+    initializeFFmpeg();
+  </script>
+</body>
+</html>

@@ -41,7 +41,7 @@
   const NUM_THUMBNAILS = 20;
   const THUMBNAIL_WIDTH = 400;
   const CROP_WIDTH = 300, CROP_HEIGHT = 300;
-  
+
   /* ===== BOOTSTRAP ===== */
   (async()=>{
     await load();            // from common.js
@@ -80,18 +80,24 @@
       const log = qs('#tty').innerText;
 
       // extract metadata
-      const resMatch=log.match(/, (\d{3,5})x(\d{3,5})/)||[];
-      const [w,h]=resMatch.slice(1,3).map(Number);
-      const fps=parseFloat((log.match(/(\d+(?:\.\d+)?) fps/)||[])[1]||0);
-      const durTxt=(log.match(/Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/)||[]).slice(1).join('.')||'';
-      const durSecs=durTxt.split(':').map(Number).reduce((a,b,i)=>a*60+ b,0);
+      const resMatch = log.match(/, (\d{3,5})x(\d{3,5})/)||[];
+      const w = Number(resMatch[1] || 0);
+      const h = Number(resMatch[2] || 0);
+      const fps = parseFloat((log.match(/(\d+(?:\.\d+)?) fps/)||[])[1] || 0);
+      const durTxt = (log.match(/Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/)||[]).slice(1).join('.') || '';
+      const durSecs = durTxt.split(':').map(Number).reduce((a,b) => a*60 + b, 0);
 
-      const errors=[];
-      if(w<MIN_W||h<MIN_H) errors.push(`Resolution is ${w}×${h} — needs ≥ ${MIN_W}×${MIN_H}.`);
-      if(fps<MIN_FPS) errors.push(`Frame-rate is ${fps} fps — needs ≥ ${MIN_FPS} fps.`);
-      if(durSecs<MIN_SECS) errors.push(`Duration is ${durSecs.toFixed(1)} s — needs ≥ ${MIN_SECS} s.`);
+      const errors = [];
+      // orientation-aware resolution check
+      const portraitOK = (w >= MIN_W && h >= MIN_H);
+      const landscapeOK = (w >= MIN_H && h >= MIN_W);
+      if (!(portraitOK || landscapeOK)) {
+        errors.push(`Resolution is ${w}×${h} — needs at least ${MIN_W}×${MIN_H} (portrait) or ${MIN_H}×${MIN_W} (landscape).`);
+      }
+      if (fps && fps < MIN_FPS) errors.push(`Frame-rate is ${fps} fps — needs ≥ ${MIN_FPS} fps.`);
+      if (durSecs && durSecs < MIN_SECS) errors.push(`Duration is ${durSecs.toFixed(1)} s — needs ≥ ${MIN_SECS} s.`);
 
-      if(errors.length) {
+      if (errors.length) {
         show('danger','❌ Upload blocked:<ul><li>'+errors.join('</li><li>')+'</li></ul>');
         await ffmpeg.unmount(MOUNT); await ffmpeg.deleteDir(MOUNT);
         return;
@@ -99,7 +105,7 @@
 
       // passed checks → generate thumbnails
       show('info','Generating thumbnails…');
-      const interval = durSecs/NUM_THUMBNAILS;
+      const interval = durSecs / NUM_THUMBNAILS;
       await ffmpeg.createDir('/thumbnails');
       const args = [
         '-skip_frame','nokey',
@@ -109,12 +115,12 @@
         '/thumbnails/thumb_%d.png'
       ];
       const code = await ffmpeg.exec(args);
-      if(code!==0) {
+      if (code !== 0) {
         show('danger','❌ Error generating thumbnails.');
       } else {
-        for(let i=1; i<=NUM_THUMBNAILS; i++) {
+        for (let i = 1; i <= NUM_THUMBNAILS; i++) {
           const data = await ffmpeg.readFile(`/thumbnails/thumb_${i}.png`);
-          const url = URL.createObjectURL(new Blob([data.buffer],{type:'image/png'}));
+          const url = URL.createObjectURL(new Blob([data.buffer], {type:'image/png'}));
           const img = document.createElement('img'); img.src = url;
           qs('#thumbs').appendChild(img);
         }
@@ -126,7 +132,7 @@
       await ffmpeg.deleteDir(MOUNT);
       await ffmpeg.deleteDir('/thumbnails');
 
-    } catch(err) {
+    } catch (err) {
       console.error(err);
       show('danger','⚠️ Error processing file.');
     }

@@ -62,14 +62,11 @@
     const CROP_HEIGHT      = 300;
 
     // Minimum requirements
-    const MIN_FPS            = 15;    // frames per second
-    const MIN_RES_WIDTH      = 640;   // minimum width in px
-    const MIN_RES_HEIGHT     = 360;   // minimum height in px
-    const MIN_DURATION_SECONDS = 5;   // minimum duration in seconds
+    const MIN_FPS            = 15;
+    const MIN_RES_WIDTH      = 640;
+    const MIN_RES_HEIGHT     = 360;
+    const MIN_DURATION_SECONDS = 5;
 
-    /**
-     * Append a line of status text into the #tty box.
-     */
     function appendLog(msg) {
       const tty = document.getElementById('tty');
       tty.textContent += msg + '\n';
@@ -91,47 +88,42 @@
     }
 
     async function runCommand() {
-      const fileInput          = document.getElementById('fileInput');
-      const outputLabel        = document.getElementById('outputLabel');
-      const thumbnailsContainer= document.getElementById('thumbnailsContainer');
-      const metadataList       = document.getElementById("metadataList");
+      const fileInput           = document.getElementById('fileInput');
+      const outputLabel         = document.getElementById('outputLabel');
+      const thumbnailsContainer = document.getElementById('thumbnailsContainer');
+      const metadataList        = document.getElementById('metadataList');
 
       if (!fileInput.files.length) {
         alert('Please select a file.');
         return;
       }
 
-      const file          = fileInput.files[0];
-      const inputDir      = '/input';
-      const inputFile     = `${inputDir}/${file.name}`;
-      const thumbnailFile = '/thumbnail_%d.png';
+      const file      = fileInput.files[0];
+      const inputDir  = '/input';
+      const inputFile = `${inputDir}/${file.name}`;
 
       try {
-        // -- Clear UI and logs
+        // Clear UI and logs
         thumbnailsContainer.replaceChildren();
         metadataList.replaceChildren();
         document.getElementById('tty').textContent = '';
         outputLabel.textContent = '';
         appendLog("📂 Preparing workspace…");
 
-        // -- Mount the file
+        // Mount and probe
         await ffmpeg.createDir(inputDir);
         await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
         appendLog("✔ Video file mounted");
-
-        // -- Probe for metadata
         appendLog("🔍 Probing video metadata…");
-        await ffmpeg.exec(['-hide_banner', '-v', 'info', '-i', inputFile]);
+        await ffmpeg.exec(['-hide_banner','-v','info','-i', inputFile]);
         appendLog("✔ Metadata probe complete");
 
         const logContent = document.getElementById('tty').innerText;
         const metadata   = extractMetadataFromLog(logContent);
         displayMetadata(metadata);
 
-        // -- Validate video
         appendLog("⚙️ Validating video against minimum requirements…");
-        const valid = validateVideo(metadata);
-        if (!valid) {
+        if (!validateVideo(metadata)) {
           appendLog("❌ Video does not meet the minimum requirements.");
           outputLabel.textContent = "❌ Video does not meet the minimum requirements.";
           await ffmpeg.unmount(inputDir);
@@ -142,43 +134,40 @@
         appendLog("✅ Video is valid. Generating thumbnails…");
         outputLabel.textContent = "✅ Video meets the minimum requirements. Generating thumbnails…";
 
-        // -- Calculate interval & generate thumbnails
         const durationInSeconds = convertDurationToSeconds(metadata.Duration);
-        const interval = calculateInterval(durationInSeconds, NUM_THUMBNAILS);
-        const thumbnailArgs = [
-          '-skip_frame', 'nokey',
+        const interval          = calculateInterval(durationInSeconds, NUM_THUMBNAILS);
+        const thumbnailArgs     = [
+          '-skip_frame','nokey',
           '-i', inputFile,
           '-vf',
-            `fps=1/${interval},` +
-            `scale=${CROP_WIDTH}:${CROP_HEIGHT}:force_original_aspect_ratio=increase,` +
-            `crop=${CROP_WIDTH}:${CROP_HEIGHT}`,
-          '-flags2', 'fast',
-          '-an', '-sn', '-dn',
-          thumbnailFile,
+            `fps=1/${interval},scale=${CROP_WIDTH}:${CROP_HEIGHT}:force_original_aspect_ratio=increase,crop=${CROP_WIDTH}:${CROP_HEIGHT}`,
+          '-flags2','fast','-an','-sn','-dn',
+          '/thumbnail_%d.png'
         ];
-        const thumbnailErr = await ffmpeg.exec(thumbnailArgs);
+        const ret = await ffmpeg.exec(thumbnailArgs);
 
-        if (thumbnailErr !== 0) {
+        if (ret !== 0) {
           appendLog("❌ Error generating thumbnails.");
-          outputLabel.textContent = "Error generating thumbnails. See log above for details.";
+          outputLabel.textContent = "❌ Error generating thumbnails. See log above for details.";
         } else {
           appendLog("✅ Thumbnails generated, rendering to page…");
           for (let i = 1; i <= NUM_THUMBNAILS; i++) {
             const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
-            const url  = URL.createObjectURL(new Blob([data.buffer], { type: "image/png" }));
+            const url  = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
             const img  = document.createElement('img');
             img.src = url;
             thumbnailsContainer.appendChild(img);
           }
-          appendLog("🎉 All thumbnails displayed.");
-          outputLabel.textContent += " 👍 Completed.";
+
+          // Show key messages in outputLabel instead of tty
+          outputLabel.textContent += "🎉 All thumbnails displayed.";
+          outputLabel.textContent += " 🧹 Cleaning up…";
+          outputLabel.textContent += " 🗑 Workspace cleared.";
         }
 
-        // -- Cleanup
-        appendLog("🧹 Cleaning up…");
+        // Final cleanup
         await ffmpeg.unmount(inputDir);
         await ffmpeg.deleteDir(inputDir);
-        appendLog("🗑 Workspace cleared.");
       } catch (error) {
         console.error(error);
         appendLog("❌ Error extracting segment. See console for details.");
@@ -186,67 +175,45 @@
       }
     }
 
+    // Metadata helpers (unchanged)
+    function convertDurationToSeconds(d) {
+      const [h,m,s] = d.split(':').map(Number);
+      return h*3600 + m*60 + s;
+    }
+    function calculateInterval(d,count) { return d/count; }
+    function extractMetadataFromLog(log) {
+      const md = {};
+      const dm = log.match(/Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/);
+      const bm = log.match(/bitrate: (\d+ kb\/s)/);
+      const rm = log.match(/, (\d{3,5}x\d{3,5})/);
+      const fm = log.match(/(\d+(\.\d+)?) fps/);
+      const vm = log.match(/Video: ([^,]+)/);
+      const am = log.match(/Audio: ([^,]+)/);
+      if(dm) md.Duration = `${dm[1]}.${dm[2]}`;
+      if(bm) md.Bitrate  = bm[1];
+      if(rm) md.Resolution = rm[1];
+      if(fm) md.Framerate = `${fm[1]} fps`;
+      if(vm) md['Video Codec'] = vm[1];
+      if(am) md['Audio Codec'] = am[1];
+      return md;
+    }
     function validateVideo(meta) {
-      const duration = convertDurationToSeconds(meta.Duration);
-      if (duration < MIN_DURATION_SECONDS) {
-        alert(`Video too short: ${duration}s (min ${MIN_DURATION_SECONDS}s).`);
-        return false;
-      }
+      const d = convertDurationToSeconds(meta.Duration);
+      if(d < MIN_DURATION_SECONDS) { alert(`Video too short: ${d}s (min ${MIN_DURATION_SECONDS}s).`); return false; }
       const fps = parseFloat(meta.Framerate);
-      if (fps < MIN_FPS) {
-        alert(`Frame rate too low: ${fps} fps (min ${MIN_FPS} fps).`);
-        return false;
-      }
-      const [w, h] = meta.Resolution.split('x').map(Number);
-      if (w < MIN_RES_WIDTH || h < MIN_RES_HEIGHT) {
-        alert(`Resolution too low: ${w}x${h} (min ${MIN_RES_WIDTH}x${MIN_RES_HEIGHT}).`);
-        return false;
-      }
+      if(fps < MIN_FPS) { alert(`Frame rate too low: ${fps} fps (min ${MIN_FPS} fps).`); return false; }
+      const [w,h] = meta.Resolution.split('x').map(Number);
+      if(w < MIN_RES_WIDTH || h < MIN_RES_HEIGHT) { alert(`Resolution too low: ${w}x${h} (min ${MIN_RES_WIDTH}x${MIN_RES_HEIGHT}).`); return false; }
       return true;
     }
-
-    function extractDurationFromLog(log) {
-      const regex = /Duration: (\d{2}:\d{2}:\d{2})\.(\d+),/;
-      const match = log.match(regex);
-      return match ? `${match[1]}.${match[2]}` : '00:00:00.00';
-    }
-
-    function convertDurationToSeconds(duration) {
-      const [hours, minutes, seconds] = duration.split(':').map(Number);
-      return (hours * 3600) + (minutes * 60) + seconds;
-    }
-
-    function calculateInterval(durationInSeconds, intervalsCount) {
-      return durationInSeconds / intervalsCount;
-    }
-
-    function extractMetadataFromLog(log) {
-      const metadata = {};
-      const durationMatch    = log.match(/Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/);
-      const bitrateMatch     = log.match(/bitrate: (\d+ kb\/s)/);
-      const resolutionMatch  = log.match(/, (\d{3,5}x\d{3,5})/);
-      const framerateMatch   = log.match(/(\d+(\.\d+)?) fps/);
-      const videoCodecMatch  = log.match(/Video: ([^,]+)/);
-      const audioCodecMatch  = log.match(/Audio: ([^,]+)/);
-
-      if (durationMatch)    metadata.Duration      = `${durationMatch[1]}.${durationMatch[2]}`;
-      if (bitrateMatch)     metadata.Bitrate       = bitrateMatch[1];
-      if (resolutionMatch)  metadata.Resolution    = resolutionMatch[1];
-      if (framerateMatch)   metadata.Framerate     = `${framerateMatch[1]} fps`;
-      if (videoCodecMatch)  metadata['Video Codec']= videoCodecMatch[1];
-      if (audioCodecMatch)  metadata['Audio Codec']= audioCodecMatch[1];
-
-      return metadata;
-    }
-
     function displayMetadata(metadata) {
-      const list = document.getElementById("metadataList");
+      const list = document.getElementById('metadataList');
       list.replaceChildren();
-      for (const [key, val] of Object.entries(metadata)) {
-        const li = document.createElement("li");
-        li.textContent = `${key}: ${val}`;
+      Object.entries(metadata).forEach(([k,v]) => {
+        const li = document.createElement('li');
+        li.textContent = `${k}: ${v}`;
         list.appendChild(li);
-      }
+      });
     }
 
     document.getElementById('runButton').addEventListener('click', runCommand);

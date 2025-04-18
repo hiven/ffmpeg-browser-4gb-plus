@@ -30,6 +30,7 @@
       border: 1px solid #ddd;
       padding: 1rem;
       border-radius: 0.5rem;
+      font-family: monospace;
     }
   </style>
 </head>
@@ -58,7 +59,11 @@
     </div>
   </section>
   <script type="module">
-    const { load, ffmpeg, cleanLog, log } = window;
+    // Access FFmpeg and utility functions from common.js
+    const loadFFmpeg = window.load;
+    const ffmpeg = window.ffmpeg;
+    const cleanLogFunc = window.cleanLog;
+
     const NUM_THUMBNAILS = 20;
     const THUMBNAIL_WIDTH = 400;
     const CROP_WIDTH = 300;
@@ -82,7 +87,7 @@
 
       async loadFfmpeg() {
         try {
-          await load(false, ({ received, total }) => {
+          await loadFFmpeg(false, ({ received, total }) => {
             const percent = Math.round((received / total) * 100);
             this.log(`[FFmpeg] Loading: ${percent}%`);
           });
@@ -100,7 +105,8 @@
       }
 
       resetUI() {
-        cleanLog();
+        cleanLogFunc();
+        this.tty.textContent = '';
         this.metadataList.replaceChildren();
         this.thumbnailsContainer.replaceChildren();
         this.outputLabel.textContent = '';
@@ -203,7 +209,10 @@
       }
 
       log(message) {
-        log(message);
+        // Append to terminal and console
+        this.tty.textContent += message + '\n';
+        this.tty.scrollTop = this.tty.scrollHeight;
+        console.log(message);
       }
     }
 

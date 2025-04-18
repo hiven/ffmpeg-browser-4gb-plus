@@ -91,6 +91,9 @@
         await load(false, ({ received, total }) =>
           log(`Loading FFmpeg: ${Math.round(received/total*100)}%`)
         );
+        // Route FFmpeg logs to our log box
+        ffmpeg.setLogger(({ message }) => log(message));
+
         log('✅ FFmpeg loaded');
         DOM.runButton.disabled = false;
       } catch {
@@ -102,13 +105,13 @@
     function parseMeta(text) {
       const m = str => {
         const r = text.match(new RegExp(str.pattern));
-        return r ? r.map(g => g).filter((_,i)=>i>0).join('') : null;
+        return r ? r[1] : null;
       };
       return {
-        Duration: m({pattern:'Duration: (\d{2}:\d{2}:\d{2}\.\d+)'}),
-        Bitrate: m({pattern:'bitrate: (\d+ kb/s)'}),
-        Resolution: m({pattern:', (\d{3,5}x\d{3,5})'}),
-        Framerate: m({pattern:'(\d+(?:\.\d+)?) fps'}),
+        Duration: m({pattern:'Duration: (\\d{2}:\\d{2}:\\d{2}\\.\\d+)'}),
+        Bitrate: m({pattern:'bitrate: (\\d+ kb/s)'}),
+        Resolution: m({pattern:', (\\d{3,5}x\\d{3,5})'}),
+        Framerate: m({pattern:'(\\d+(?:\\.\\d+)?) fps'}),
         VideoCodec: m({pattern:'Video: ([^,]+)'}),
         AudioCodec: m({pattern:'Audio: ([^,]+)'}),
       };
@@ -165,7 +168,8 @@
       await ffmpeg.mount('WORKERFS',{files:[file]},mnt);
 
       DOM.output.textContent = 'Probing metadata...';
-      await ffmpeg.exec(['-hide_banner','-v','info','-i',inPath]);
+      // Probe with null output
+      await ffmpeg.exec(['-hide_banner','-v','info','-i',inPath,'-f','null','-']);
       const logText = DOM.logBox.innerText;
       const meta = parseMeta(logText);
       showMeta(meta);

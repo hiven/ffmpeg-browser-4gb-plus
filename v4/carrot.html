@@ -28,8 +28,6 @@
       </div>
 
       <div id="outputLabel" class="mt-4"></div>
-
-      <!-- thumbnailsContainer will be added dynamically -->
     </div>
   </section>
 
@@ -112,7 +110,10 @@
         const ret = await ffmpeg.exec(thumbnailArgs);
 
         if (ret !== 0) {
-          showAlert('Thumbnail generation failed. See console for details.', 'is-danger');
+          const errorOutput = ffmpegLogs
+            .filter(line => line.toLowerCase().includes('error'))
+            .join('<br/>') || 'Thumbnail generation failed due to unknown error.';
+          showAlert(errorOutput, 'is-danger');
         } else {
           const thumbnailsContainer = document.createElement('div');
           thumbnailsContainer.id = 'thumbnailsContainer';

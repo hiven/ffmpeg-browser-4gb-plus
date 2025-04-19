@@ -46,14 +46,18 @@
 
     async function initializeFFmpeg() {
       try {
-        await load(false, progress => {
+        const isSecure = window.isSecureContext || location.protocol === 'https:';
+        const useThreads = isSecure && window.crossOriginIsolated;
+
+        await load(useThreads, progress => {
           const pct = Math.round((progress.received / progress.total) * 100);
           console.log(`Loading FFmpeg: ${pct}%`);
         });
+
         console.log('FFmpeg loaded successfully');
         runButton.disabled = false;
       } catch (error) {
-        console.error('Failed to load FFmpeg');
+        console.error('Failed to load FFmpeg', error);
         showAlert('Error loading FFmpeg.', 'is-danger');
       }
     }

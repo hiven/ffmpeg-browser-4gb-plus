@@ -65,6 +65,10 @@
 
     function showAlert(message, type = 'is-info') {
       const alertArea = document.getElementById('alertArea');
+      if (!message) {
+        alertArea.innerHTML = '';
+        return;
+      }
       alertArea.innerHTML = `
         <div class="notification ${type} is-light">
           <button class="delete" onclick="this.parentElement.remove()"></button>
@@ -84,6 +88,8 @@
         return;
       }
 
+      showAlert('Processing…', 'is-light'); // grey info alert at the start
+
       const file = fileInput.files[0];
       const inputDir = '/input';
       const inputFile = `${inputDir}/${file.name}`;
@@ -94,7 +100,6 @@
         metadataList.replaceChildren();
         document.getElementById('tty').textContent = '';
         outputLabel.innerHTML = '';
-        showAlert('', ''); // clear any previous alert
 
         console.log('Preparing workspace');
         await ffmpeg.createDir(inputDir);

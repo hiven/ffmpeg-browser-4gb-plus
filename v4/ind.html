@@ -71,7 +71,6 @@
       }
       alertArea.innerHTML = `
         <div class="notification ${type} is-light">
-          <button class="delete" onclick="this.parentElement.remove()"></button>
           ${message}
         </div>
       `;
@@ -88,7 +87,7 @@
         return;
       }
 
-      showAlert('Processing…', 'is-light'); // grey info alert at the start
+      showAlert('Processing…', 'is-light');
 
       const file = fileInput.files[0];
       const inputDir = '/input';

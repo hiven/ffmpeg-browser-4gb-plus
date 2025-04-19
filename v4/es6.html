@@ -70,9 +70,7 @@
     </div>
   </section>
 
-  <!-- your existing loader -->
   <script src="common.js"></script>
-
   <script>
     const CONFIG = {
       NUM_THUMBNAILS: 20,
@@ -84,7 +82,6 @@
       },
     };
 
-    // UI references
     const UI = {
       fileInput: document.getElementById('fileInput'),
       runButton: document.getElementById('runButton'),
@@ -94,7 +91,6 @@
       thumbsDiv: document.getElementById('thumbnailsContainer'),
     };
 
-    // Helpers
     const toSeconds = d => {
       const [h,m,s] = d.split(':').map(Number);
       return h*3600 + m*60 + s;
@@ -144,7 +140,6 @@
       return true;
     };
 
-    // Bootstrap FFmpeg
     const initializeFFmpeg = async () => {
       cleanLog();
       log('Loading FFmpeg core…');
@@ -156,13 +151,14 @@
       UI.runButton.disabled = false;
     };
 
-    // Main action
     const runCommand = async () => {
       if (!UI.fileInput.files.length) {
         alert('Please select a video file.');
         return;
       }
       const file = UI.fileInput.files[0];
+      const inputDir  = '/input';
+      const inputFile = `${inputDir}/${file.name}`;
 
       // reset UI
       cleanLog();
@@ -170,19 +166,20 @@
       UI.metaList.replaceChildren();
       UI.thumbsDiv.replaceChildren();
 
-      // write file into MEMFS
-      log(`Writing ${file.name} into FFmpeg FS…`);
-      const buf = await file.arrayBuffer();
-      ffmpeg.FS('writeFile', file.name, new Uint8Array(buf));
+      // 1) mount the file
+      log(`Preparing workspace…`);
+      await ffmpeg.createDir(inputDir);
+      await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
+      log(`File mounted at ${inputFile}`);
 
-      // capture log for metadata
+      // 2) capture logs for metadata
       let logBuffer = '';
       const listener = ({ message }) => { logBuffer += message + '\n'; };
       ffmpeg.on('log', listener);
 
-      // 1) Probe
+      // 3) probe
       log('Probing metadata…');
-      await ffmpeg.exec(['-hide_banner','-v','info','-i', file.name]);
+      await ffmpeg.exec(['-hide_banner','-v','info','-i', inputFile]);
 
       // parse & display
       const md = parseMetadata(logBuffer);
@@ -192,7 +189,7 @@
         return;
       }
 
-      // 2) Thumbnails
+      // 4) generate thumbnails
       log('Generating thumbnails…');
       const duration = toSeconds(md.Duration);
       const interval = duration / CONFIG.NUM_THUMBNAILS;
@@ -204,29 +201,31 @@
       const thumbArgs = [
         '-hide_banner','-v','info',
         '-skip_frame','nokey',
-        '-i', file.name,
+        '-i', inputFile,
         '-vf', vf,
         '-flags2','fast',
         '-an','-sn','-dn',
-        ...Array.from(
-          { length: CONFIG.NUM_THUMBNAILS },
-          (_,i) => `thumb_${i+1}.png`
-        )
       ];
+      // tell ffmpeg where to write thumbnails
+      for (let i = 1; i <= CONFIG.NUM_THUMBNAILS; i++) {
+        thumbArgs.push(`/thumb_${i}.png`);
+      }
       await ffmpeg.exec(thumbArgs);
-
-      // remove our extra log listener
       ffmpeg.off('log', listener);
 
-      // display
-      for (let i=1; i<=CONFIG.NUM_THUMBNAILS; i++) {
-        const data = ffmpeg.FS('readFile', `thumb_${i}.png`);
+      // 5) read & display thumbnails
+      log('Reading thumbnails…');
+      for (let i = 1; i <= CONFIG.NUM_THUMBNAILS; i++) {
+        const data = await ffmpeg.readFile(`/thumb_${i}.png`);
         const url  = URL.createObjectURL(new Blob([data.buffer],{type:'image/png'}));
         const img  = document.createElement('img');
         img.src = url;
         UI.thumbsDiv.appendChild(img);
       }
 
+      // 6) clean up
+      await ffmpeg.unmount(inputDir);
+      await ffmpeg.deleteDir(inputDir);
       UI.output.textContent = 'All done!';
     };
 

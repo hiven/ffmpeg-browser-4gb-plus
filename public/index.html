@@ -1,33 +1,56 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <!-- Load UMD bundles from /ffmpeg -->
   <script src="/ffmpeg/ffmpeg.js"></script>
   <script src="/ffmpeg/util.js"></script>
+  <style>
+    #status {
+      padding: 0.5em;
+      background: #eef;
+      border: 1px solid #99c;
+      margin-bottom: 1em;
+      display: inline-block;
+      font-family: sans-serif;
+    }
+  </style>
 </head>
 <body>
+  <div id="status">Initializing…</div>
+  <br/>
+  <input type="file" id="uploader" /><br/>
+  <video id="output" controls style="max-width:100%; margin-top:1em;"></video>
+
   <script>
     (async () => {
-      // 1. Create instance
+      const status = document.getElementById('status');
+      const video  = document.getElementById('output');
+      const uploader = document.getElementById('uploader');
+
+      // 1. Create the FFmpeg instance
       const ffmpeg = new FFmpegWASM.FFmpeg({ log: true });
 
       // 2. Load local assets
+      status.textContent = 'Loading FFmpeg…';
       await ffmpeg.load({
         coreURL:  '/ffmpeg/ffmpeg-core.js',
         wasmURL:  '/ffmpeg/ffmpeg-core.wasm',
         workerURL:'/ffmpeg/ffmpeg-core.worker.js'
       });
-      console.log('FFmpeg v12 loaded locally (UMD)');
+      status.textContent = 'FFmpeg v12 loaded!';
 
-      // 3. Use writeFile, exec, readFile
-      const response = await fetch('/path/to/video.webm');
-      const arrayBuffer = await response.arrayBuffer();
-      await ffmpeg.writeFile('in.webm', new Uint8Array(arrayBuffer));
-      await ffmpeg.exec(['-i', 'in.webm', '-ss', '0', '-to', '1', 'out.mp4']);
-      const out = await ffmpeg.readFile('out.mp4');
-      // e.g. play the result:
-      const videoURL = URL.createObjectURL(new Blob([out.buffer], { type: 'video/mp4' }));
-      document.body.innerHTML += `<video src="${videoURL}" controls></video>`;
+      // 3. When a file is picked, trim first second and play
+      uploader.addEventListener('change', async ({ target: { files } }) => {
+        if (files.length === 0) return;
+        status.textContent = 'Trimming…';
+        const file = files[0];
+        const data = await fetchFile(file);
+        await ffmpeg.writeFile(file.name, data);
+        await ffmpeg.exec(['-i', file.name, '-ss', '0', '-to', '1', 'output.mp4']);
+        const out = await ffmpeg.readFile('output.mp4');
+        video.src = URL.createObjectURL(new Blob([out.buffer], { type: 'video/mp4' }));
+        status.textContent = 'Done!';
+      });
     })();
   </script>
 </body>

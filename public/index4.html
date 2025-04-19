@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FFmpeg v12 ES Module – Load & Trim</title>
+</head>
+<body>
+  <h3>FFmpeg v12 ES Module – Load & Trim First 1 Second</h3>
+
+  <!-- Load Button -->
+  <button id="load-btn">Load FFmpeg</button>
+  <span id="load-status">Not loaded</span>
+  <br/><br/>
+
+  <!-- File Uploader (disabled until loaded) -->
+  <input type="file" id="uploader" accept="video/*" disabled />
+  <p id="status"></p>
+  <video id="output" controls style="max-width:100%; margin-top:1em;"></video>
+
+  <script type="module">
+    import { FFmpeg } from '@ffmpeg/ffmpeg';
+    import { fetchFile } from '@ffmpeg/util';
+
+    const loadBtn    = document.getElementById('load-btn');
+    const loadStatus = document.getElementById('load-status');
+    const uploader   = document.getElementById('uploader');
+    const statusTxt  = document.getElementById('status');
+    const outputVid  = document.getElementById('output');
+
+    // 1️⃣ Instantiate FFmpeg (no load yet)
+    const ffmpeg = new FFmpeg({ log: true });
+
+    // 2️⃣ Load on button click
+    loadBtn.addEventListener('click', async () => {
+      loadBtn.disabled = true;
+      loadStatus.textContent = 'Loading…';
+      try {
+        await ffmpeg.load({
+          coreURL:   '/ffmpeg/ffmpeg-core.js',
+          wasmURL:   '/ffmpeg/ffmpeg-core.wasm',
+          workerURL: '/ffmpeg/ffmpeg-core.worker.js'
+        });
+        loadStatus.textContent = 'Loaded ✔️';
+        uploader.disabled = false;      // enable file input
+      } catch (e) {
+        loadStatus.textContent = 'Error loading';
+        console.error(e);
+        loadBtn.disabled = false;
+      }
+    });
+
+    // 3️⃣ Handle upload & trim
+    uploader.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      statusTxt.textContent = 'Reading file…';
+      const data = await fetchFile(file);
+
+      statusTxt.textContent = 'Writing to FS…';
+      await ffmpeg.writeFile(file.name, data);
+
+      statusTxt.textContent = 'Trimming…';
+      await ffmpeg.exec([
+        '-i', file.name,
+        '-ss', '0',
+        '-to', '1',
+        'output.mp4'
+      ]);
+
+      statusTxt.textContent = 'Exporting…';
+      const out = await ffmpeg.readFile('output.mp4');
+      const url = URL.createObjectURL(
+        new Blob([out.buffer], { type: 'video/mp4' })
+      );
+      outputVid.src = url;
+      statusTxt.textContent = 'Done!';
+    });
+  </script>
+</body>
+</html>

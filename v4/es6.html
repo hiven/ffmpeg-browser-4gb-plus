@@ -1,19 +1,47 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>FFmpeg Segment Extractor</title>
-  <script src="common.js"></script>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css"/>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>FFmpeg Thumbnails Extractor</title>
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css"
+  />
   <style>
-    /* … your existing styles … */
+    #tty {
+      font-family: monospace;
+      white-space: pre-wrap;
+      overflow-y: auto;
+      height: 200px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      padding: 10px;
+      background-color: #f5f5f5;
+    }
+    #thumbnailsContainer img {
+      display: inline-block;
+      margin: 5px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      width: 120px;
+      height: auto;
+    }
+    #thumbnailsContainer {
+      display: flex;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      padding: 10px;
+      background-color: #f5f5f5;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+    }
   </style>
 </head>
 <body>
   <section class="section">
     <div class="container">
-      <h1 class="title">FFmpeg Segment Extractor</h1>
+      <h1 class="title">FFmpeg Thumbnails Extractor</h1>
 
       <div class="field">
         <label class="label">Upload a Video File</label>
@@ -24,7 +52,9 @@
 
       <div class="field">
         <div class="control">
-          <button class="button is-primary" id="runButton" disabled>Extract Segment</button>
+          <button class="button is-primary" id="runButton" disabled>
+            Extract Thumbnails
+          </button>
         </div>
       </div>
 
@@ -40,44 +70,45 @@
     </div>
   </section>
 
-  <script type="module">
+  <!-- your existing loader -->
+  <script src="common.js"></script>
+
+  <script>
     const CONFIG = {
       NUM_THUMBNAILS: 20,
       CROP: { width: 300, height: 300 },
       MIN: {
         FPS: 15,
-        RES: { width: 640, height: 360 },
+        RES:   { width: 640, height: 360 },
         DURATION: 5, // seconds
-      }
+      },
     };
 
+    // UI references
     const UI = {
-      fileInput:      document.getElementById('fileInput'),
-      runButton:      document.getElementById('runButton'),
-      tty:            document.getElementById('tty'),
-      outputLabel:    document.getElementById('outputLabel'),
-      metadataList:   document.getElementById('metadataList'),
-      thumbnailsDiv:  document.getElementById('thumbnailsContainer'),
+      fileInput: document.getElementById('fileInput'),
+      runButton: document.getElementById('runButton'),
+      tty:       document.getElementById('tty'),
+      output:    document.getElementById('outputLabel'),
+      metaList:  document.getElementById('metadataList'),
+      thumbsDiv: document.getElementById('thumbnailsContainer'),
     };
 
-    const loadFFmpeg = async () => {
-      await load(false, p => {
-        const pct = Math.round(p.received / p.total * 100);
-        UI.tty.textContent = `Loading FFmpeg: ${pct}%`;
-      });
-      UI.tty.textContent = `FFmpeg loaded.`;
-      UI.runButton.disabled = false;
+    // Helpers
+    const toSeconds = d => {
+      const [h,m,s] = d.split(':').map(Number);
+      return h*3600 + m*60 + s;
     };
 
     const parseMetadata = log => {
       const md = {};
-      ;[ 
-        [ /Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/,   (m) => md.Duration   = `${m[1]}.${m[2]}` ],
-        [ /bitrate: (\d+ kb\/s)/,                  (m) => md.Bitrate    = m[1] ],
-        [ /, (\d{3,5}x\d{3,5})/,                   (m) => md.Resolution = m[1] ],
-        [ /(\d+(\.\d+)?) fps/,                     (m) => md.Framerate  = `${m[1]} fps` ],
-        [ /Video: ([^,]+)/,                        (m) => md.VideoCodec = m[1] ],
-        [ /Audio: ([^,]+)/,                        (m) => md.AudioCodec = m[1] ],
+      [
+        [ /Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/, m => md.Duration   = `${m[1]}.${m[2]}` ],
+        [ /bitrate: (\d+ kb\/s)/,               m => md.Bitrate    = m[1]        ],
+        [ /, (\d{3,5}x\d{3,5})/,                m => md.Resolution = m[1]        ],
+        [ /(\d+(\.\d+)?) fps/,                  m => md.Framerate  = `${m[1]} fps`],
+        [ /Video: ([^,]+)/,                     m => md.VideoCodec = m[1]        ],
+        [ /Audio: ([^,]+)/,                     m => md.AudioCodec = m[1]        ],
       ].forEach(([re, fn]) => {
         const m = log.match(re);
         if (m) fn(m);
@@ -85,116 +116,122 @@
       return md;
     };
 
-    const validate = ({ Duration, Framerate, Resolution }) => {
-      const toSec = d => {
-        const [h,m,s] = d.split(':').map(Number);
-        return h*3600 + m*60 + s;
-      };
-      const secs = toSec(Duration);
+    const displayMetadata = md => {
+      UI.metaList.replaceChildren();
+      for (const [k,v] of Object.entries(md)) {
+        const li = document.createElement('li');
+        li.textContent = `${k}: ${v}`;
+        UI.metaList.appendChild(li);
+      }
+    };
+
+    const validate = md => {
+      const secs = toSeconds(md.Duration);
       if (secs < CONFIG.MIN.DURATION) {
-        UI.outputLabel.textContent = `Video too short (${secs}s < ${CONFIG.MIN.DURATION}s)`;
+        UI.output.textContent = `Too short (${secs}s < ${CONFIG.MIN.DURATION}s)`;
         return false;
       }
-      const fps = parseFloat(Framerate);
+      const fps = parseFloat(md.Framerate);
       if (fps < CONFIG.MIN.FPS) {
-        UI.outputLabel.textContent = `FPS too low (${fps} < ${CONFIG.MIN.FPS})`;
+        UI.output.textContent = `FPS too low (${fps} < ${CONFIG.MIN.FPS})`;
         return false;
       }
-      const [w,h] = Resolution.split('x').map(Number);
+      const [w,h] = md.Resolution.split('x').map(Number);
       if (w < CONFIG.MIN.RES.width || h < CONFIG.MIN.RES.height) {
-        UI.outputLabel.textContent = `Resolution too low (${w}×${h} < ${CONFIG.MIN.RES.width}×${CONFIG.MIN.RES.height})`;
+        UI.output.textContent = `Resolution too low (${w}×${h} < ${CONFIG.MIN.RES.width}×${CONFIG.MIN.RES.height})`;
         return false;
       }
       return true;
     };
 
-    const displayMetadata = md => {
-      UI.metadataList.replaceChildren();
-      Object.entries(md).forEach(([k,v]) => {
-        const li = document.createElement('li');
-        li.textContent = `${k}: ${v}`;
-        UI.metadataList.appendChild(li);
+    // Bootstrap FFmpeg
+    const initializeFFmpeg = async () => {
+      cleanLog();
+      log('Loading FFmpeg core…');
+      await load(false, ({ received, total }) => {
+        const pct = total>0 ? Math.round(received/total*100) : 0;
+        log(`Loading core: ${pct}%`);
       });
+      log('FFmpeg loaded.');
+      UI.runButton.disabled = false;
     };
 
-    const generateThumbnails = async (inputFile, md) => {
-      const toSec = d => {
-        const [h,m,s] = d.split(':').map(Number);
-        return h*3600 + m*60 + s;
-      };
-      const interval = toSec(md.Duration) / CONFIG.NUM_THUMBNAILS;
-      const vf = `fps=1/${interval},scale=${CONFIG.CROP.width}:${CONFIG.CROP.height}:force_original_aspect_ratio=increase,crop=${CONFIG.CROP.width}:${CONFIG.CROP.height}`;
-
-      const args = [
-        '-hide_banner','-v','info',
-        '-skip_frame','nokey',
-        '-i', inputFile,
-        '-vf', vf,
-        '-flags2','fast','-an','-sn','-dn',
-        '/thumb_%d.png'
-      ];
-      await ffmpeg.exec(args);
-
-      // read all at once
-      const reads = Array.from({length:CONFIG.NUM_THUMBNAILS}, (_, i) =>
-        ffmpeg.readFile(`/thumb_${i+1}.png`)
-      );
-      const files = await Promise.all(reads);
-      files.forEach((fileData, i) => {
-        const url = URL.createObjectURL(new Blob([fileData.buffer], { type:'image/png' }));
-        const img = document.createElement('img');
-        img.src = url;
-        UI.thumbnailsDiv.appendChild(img);
-      });
-    };
-
-    const run = async () => {
+    // Main action
+    const runCommand = async () => {
       if (!UI.fileInput.files.length) {
-        alert('Please select a file');
+        alert('Please select a video file.');
         return;
       }
-
-      const [file] = UI.fileInput.files;
-      const inputDir  = '/input';
-      const inputFile = `${inputDir}/${file.name}`;
+      const file = UI.fileInput.files[0];
 
       // reset UI
-      UI.tty.textContent = '';
-      UI.outputLabel.textContent = '';
-      UI.metadataList.replaceChildren();
-      UI.thumbnailsDiv.replaceChildren();
+      cleanLog();
+      UI.output.textContent = '';
+      UI.metaList.replaceChildren();
+      UI.thumbsDiv.replaceChildren();
 
-      await ffmpeg.createDir(inputDir);
-      await ffmpeg.mount('WORKERFS', { files:[file] }, inputDir);
+      // write file into MEMFS
+      log(`Writing ${file.name} into FFmpeg FS…`);
+      const buf = await file.arrayBuffer();
+      ffmpeg.FS('writeFile', file.name, new Uint8Array(buf));
 
-      // intercept log for metadata
+      // capture log for metadata
       let logBuffer = '';
-      ffmpeg.setLogger(({ type, message }) => {
-        if (type === 'fferr') {
-          logBuffer += message + '\n';
-        }
-      });
+      const listener = ({ message }) => { logBuffer += message + '\n'; };
+      ffmpeg.on('log', listener);
 
-      // single pass: metadata + thumbs
-      await ffmpeg.exec(['-hide_banner','-v','info','-i', inputFile]);
-      const metadata = parseMetadata(logBuffer);
-      displayMetadata(metadata);
+      // 1) Probe
+      log('Probing metadata…');
+      await ffmpeg.exec(['-hide_banner','-v','info','-i', file.name]);
 
-      if (!validate(metadata)) {
-        await ffmpeg.unmount(inputDir);
-        await ffmpeg.deleteDir(inputDir);
+      // parse & display
+      const md = parseMetadata(logBuffer);
+      displayMetadata(md);
+      if (!validate(md)) {
+        ffmpeg.off('log', listener);
         return;
       }
 
-      await generateThumbnails(inputFile, metadata);
+      // 2) Thumbnails
+      log('Generating thumbnails…');
+      const duration = toSeconds(md.Duration);
+      const interval = duration / CONFIG.NUM_THUMBNAILS;
+      const vf = [
+        `fps=1/${interval}`,
+        `scale=${CONFIG.CROP.width}:${CONFIG.CROP.height}:force_original_aspect_ratio=increase`,
+        `crop=${CONFIG.CROP.width}:${CONFIG.CROP.height}`
+      ].join(',');
+      const thumbArgs = [
+        '-hide_banner','-v','info',
+        '-skip_frame','nokey',
+        '-i', file.name,
+        '-vf', vf,
+        '-flags2','fast',
+        '-an','-sn','-dn',
+        ...Array.from(
+          { length: CONFIG.NUM_THUMBNAILS },
+          (_,i) => `thumb_${i+1}.png`
+        )
+      ];
+      await ffmpeg.exec(thumbArgs);
 
-      await ffmpeg.unmount(inputDir);
-      await ffmpeg.deleteDir(inputDir);
-      UI.outputLabel.textContent = 'Done!';
+      // remove our extra log listener
+      ffmpeg.off('log', listener);
+
+      // display
+      for (let i=1; i<=CONFIG.NUM_THUMBNAILS; i++) {
+        const data = ffmpeg.FS('readFile', `thumb_${i}.png`);
+        const url  = URL.createObjectURL(new Blob([data.buffer],{type:'image/png'}));
+        const img  = document.createElement('img');
+        img.src = url;
+        UI.thumbsDiv.appendChild(img);
+      }
+
+      UI.output.textContent = 'All done!';
     };
 
-    UI.runButton.addEventListener('click', run);
-    loadFFmpeg();
+    UI.runButton.addEventListener('click', runCommand);
+    initializeFFmpeg();
   </script>
 </body>
 </html>

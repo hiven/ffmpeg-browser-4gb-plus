@@ -1,49 +1,34 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FFmpeg WASM UMD v12 Trim Example</title>
-  <!-- UMD bundles served from /ffmpeg -->
+  <!-- Load UMD bundles from /ffmpeg -->
   <script src="/ffmpeg/ffmpeg.js"></script>
   <script src="/ffmpeg/util.js"></script>
 </head>
 <body>
-  <h3>Upload a video to trim first 1 second and play!</h3>
-  <video id="output-video" controls style="max-width: 100%;"></video><br/>
-  <input type="file" id="uploader" />
-  <p id="message"></p>
   <script>
-    const { fetchFile } = FFmpegUtil;
-    const { FFmpeg }   = FFmpegWASM;
-    let ffmpeg = null;
+    (async () => {
+      // 1. Create instance
+      const ffmpeg = new FFmpegWASM.FFmpeg({ log: true });
 
-    document.getElementById('uploader').addEventListener('change', async ({ target: { files } }) => {
-      const message = document.getElementById('message');
+      // 2. Load local assets
+      await ffmpeg.load({
+        coreURL:  '/ffmpeg/ffmpeg-core.js',
+        wasmURL:  '/ffmpeg/ffmpeg-core.wasm',
+        workerURL:'/ffmpeg/ffmpeg-core.worker.js'
+      });
+      console.log('FFmpeg v12 loaded locally (UMD)');
 
-      if (!ffmpeg) {
-        ffmpeg = new FFmpeg();
-        ffmpeg.on('log', ({ message: msg }) => console.log(msg));
-        ffmpeg.on('progress', ({ progress }) => {
-          message.textContent = `${(progress * 100).toFixed(2)} %`;
-        });
-        message.textContent = 'Loading FFmpeg core…';
-        await ffmpeg.load({
-          coreURL: '/ffmpeg/ffmpeg-core.js',
-          wasmURL: '/ffmpeg/ffmpeg-core.wasm',
-          workerURL: '/ffmpeg/ffmpeg-core.worker.js'
-        });
-      }
-
-      const { name } = files[0];
-      await ffmpeg.writeFile(name, await fetchFile(files[0]));
-      message.textContent = 'Start trimming…';
-      await ffmpeg.exec(['-i', name, '-ss', '0', '-to', '1', 'output.mp4']);
-      message.textContent = 'Complete trimming';
-      const data = await ffmpeg.readFile('output.mp4');
-      document.getElementById('output-video').src =
-        URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
-    });
+      // 3. Use writeFile, exec, readFile
+      const response = await fetch('/path/to/video.webm');
+      const arrayBuffer = await response.arrayBuffer();
+      await ffmpeg.writeFile('in.webm', new Uint8Array(arrayBuffer));
+      await ffmpeg.exec(['-i', 'in.webm', '-ss', '0', '-to', '1', 'out.mp4']);
+      const out = await ffmpeg.readFile('out.mp4');
+      // e.g. play the result:
+      const videoURL = URL.createObjectURL(new Blob([out.buffer], { type: 'video/mp4' }));
+      document.body.innerHTML += `<video src="${videoURL}" controls></video>`;
+    })();
   </script>
 </body>
 </html>

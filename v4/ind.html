@@ -11,6 +11,7 @@
   <section class="section">
     <div class="container">
       <h1 class="title">FFmpeg Segment Extractor</h1>
+
       <div id="alertArea" class="mb-4"></div>
 
       <div class="field">
@@ -27,11 +28,6 @@
       </div>
 
       <div id="outputLabel" class="mt-4"></div>
-
-      <div id="metadataContainer" class="mt-4">
-        <h2 class="subtitle">Video Metadata</h2>
-        <ul id="metadataList"></ul>
-      </div>
 
       <div id="thumbnailsContainer" class="box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto" style="gap: 0.25rem;"></div>
     </div>
@@ -70,7 +66,6 @@
     async function runCommand() {
       const fileInput = document.getElementById('fileInput');
       const thumbnailsContainer = document.getElementById('thumbnailsContainer');
-      const metadataList = document.getElementById('metadataList');
 
       if (!fileInput.files.length) {
         showAlert('Please select a file.', 'is-warning');
@@ -85,7 +80,6 @@
 
       try {
         thumbnailsContainer.replaceChildren();
-        metadataList.replaceChildren();
         document.getElementById('outputLabel').innerHTML = '';
 
         await ffmpeg.createDir(inputDir);
@@ -179,12 +173,9 @@
     }
 
     function displayMetadata(metadata) {
-      const list = document.getElementById('metadataList');
-      list.replaceChildren();
+      console.log('\nVideo Metadata\n');
       Object.entries(metadata).forEach(([k, v]) => {
-        const li = document.createElement('li');
-        li.textContent = `${k}: ${v}`;
-        list.appendChild(li);
+        console.log(`${k}: ${v}`);
       });
     }
 

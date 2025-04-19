@@ -1,13 +1,6 @@
 [build]
-  # (your normal build command here – e.g. "npm run build")
+  command = "npm run build"
+  publish = "public"
 
 [[plugins]]
-  package = "netlify-plugin-copy"
-  [plugins.inputs]
-    # grab every UMD file under those paths
-    files = [
-      "node_modules/@ffmpeg/ffmpeg/dist/umd/*",
-      "node_modules/@ffmpeg/core/dist/umd/*",
-    ]
-    # and dump them into "/ffmpeg" in the published site
-    to = "ffmpeg"
+  package = "@netlify/build"

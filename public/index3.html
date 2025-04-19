@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FFmpeg WASM v12 ES Module Upload & Trim</title>
+</head>
+<body>
+  <h3>Upload & Trim First 1 Second of Video (v12)</h3>
+  <video id="output" controls style="max-width: 100%;"></video><br/>
+  <input type="file" id="uploader" accept="video/*" />
+  <p id="status"></p>
+
+  <script type="module">
+    import { FFmpeg } from '@ffmpeg/ffmpeg';
+    import { fetchFile } from '@ffmpeg/util';
+
+    // 1️⃣ Instantiate
+    const ffmpeg = new FFmpeg({ log: true });
+
+    // 2️⃣ Load core/wasm/worker from your /ffmpeg folder
+    document.getElementById('status').textContent = 'Loading FFmpeg…';
+    await ffmpeg.load({
+      coreURL:   '/ffmpeg/ffmpeg-core.js',
+      wasmURL:   '/ffmpeg/ffmpeg-core.wasm',
+      workerURL: '/ffmpeg/ffmpeg-core.worker.js'
+    });
+    document.getElementById('status').textContent = 'Ready!';
+
+    // 3️⃣ On file upload, trim and play
+    document.getElementById('uploader').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      const status = document.getElementById('status');
+
+      status.textContent = 'Reading file…';
+      const data = await fetchFile(file);
+
+      status.textContent = 'Writing to FS…';
+      await ffmpeg.writeFile(file.name, data);
+
+      status.textContent = 'Trimming…';
+      await ffmpeg.exec([
+        '-i', file.name,
+        '-ss', '0',
+        '-to', '1',
+        'output.mp4'
+      ]);
+
+      status.textContent = 'Exporting…';
+      const out = await ffmpeg.readFile('output.mp4');
+
+      const url = URL.createObjectURL(
+        new Blob([out.buffer], { type: 'video/mp4' })
+      );
+      document.getElementById('output').src = url;
+      status.textContent = 'Done!';
+    });
+  </script>
+</body>
+</html>

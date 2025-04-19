@@ -2,25 +2,47 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>FFmpeg.wasm Netlify Test</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FFmpeg WASM UMD v12 Trim Example</title>
+  <!-- UMD bundles served from /ffmpeg -->
+  <script src="/ffmpeg/ffmpeg.js"></script>
+  <script src="/ffmpeg/util.js"></script>
 </head>
 <body>
-  <h1>FFmpeg.wasm Netlify Test</h1>
-  <button id="load-btn">Load FFmpeg</button>
-  <p id="status">Not loaded</p>
+  <h3>Upload a video to trim first 1 second and play!</h3>
+  <video id="output-video" controls style="max-width: 100%;"></video><br/>
+  <input type="file" id="uploader" />
+  <p id="message"></p>
+  <script>
+    const { fetchFile } = FFmpegUtil;
+    const { FFmpeg }   = FFmpegWASM;
+    let ffmpeg = null;
 
-  <script type="module">
-    import { createFFmpeg } from '/ffmpeg/ffmpeg.js';
+    document.getElementById('uploader').addEventListener('change', async ({ target: { files } }) => {
+      const message = document.getElementById('message');
 
-    const ffmpeg = createFFmpeg({
-      corePath: '/ffmpeg/ffmpeg-core.js',
-      log: true
-    });
+      if (!ffmpeg) {
+        ffmpeg = new FFmpeg();
+        ffmpeg.on('log', ({ message: msg }) => console.log(msg));
+        ffmpeg.on('progress', ({ progress }) => {
+          message.textContent = `${(progress * 100).toFixed(2)} %`;
+        });
+        message.textContent = 'Loading FFmpeg core…';
+        await ffmpeg.load({
+          coreURL: '/ffmpeg/ffmpeg-core.js',
+          wasmURL: '/ffmpeg/ffmpeg-core.wasm',
+          workerURL: '/ffmpeg/ffmpeg-core.worker.js'
+        });
+      }
 
-    document.getElementById('load-btn').addEventListener('click', async () => {
-      document.getElementById('status').textContent = 'Loading...';
-      await ffmpeg.load();
-      document.getElementById('status').textContent = 'FFmpeg loaded!';
+      const { name } = files[0];
+      await ffmpeg.writeFile(name, await fetchFile(files[0]));
+      message.textContent = 'Start trimming…';
+      await ffmpeg.exec(['-i', name, '-ss', '0', '-to', '1', 'output.mp4']);
+      message.textContent = 'Complete trimming';
+      const data = await ffmpeg.readFile('output.mp4');
+      document.getElementById('output-video').src =
+        URL.createObjectURL(new Blob([data.buffer], { type: 'video/mp4' }));
     });
   </script>
 </body>

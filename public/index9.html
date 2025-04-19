@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>FFmpeg Loader</title>
   <!-- Include the patched FFmpeg loader -->
-  <script src="/ffmpeg.js"></script>
+  <script src="ffmpeg/ffmpeg.js"></script>
   <style>
     body { font-family: Arial, sans-serif; padding: 20px; }
     #status { margin-bottom: 10px; font-weight: bold; }
@@ -33,10 +33,10 @@
           statusEl.textContent = 'Loading FFmpeg (multi-threaded)...';
           console.log('multi-threaded');
           await ffmpeg.load({
-            workerLoadURL: '/814.ffmpeg.js',
-            coreURL:        '/ffmpeg-core.js',
-            wasmURL:        '/ffmpeg-core.wasm',
-            workerURL:      '/ffmpeg-core.worker.js'
+            workerLoadURL: 'ffmpeg/814.ffmpeg.js',
+            coreURL:        'ffmpeg/ffmpeg-core.js',
+            wasmURL:        'ffmpeg/ffmpeg-core.wasm',
+            workerURL:      'ffmpeg/ffmpeg-core.worker.js'
           });
         } else {
           statusEl.textContent = 'Loading FFmpeg (single-threaded)...';

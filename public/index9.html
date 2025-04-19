@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FFmpeg Loader</title>
+  <!-- Include the patched FFmpeg loader -->
+  <script src="/ffmpeg.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    #status { margin-bottom: 10px; font-weight: bold; }
+    #runButton { padding: 8px 16px; font-size: 1rem; }
+  </style>
+</head>
+<body>
+  <div id="status">Initialising FFmpeg...</div>
+  <button id="runButton" disabled>Run</button>
+
+  <script>
+    async function initializeFFmpeg() {
+      const statusEl = document.getElementById('status');
+      const runBtn = document.getElementById('runButton');
+      const useThreads = false; // set true for multi-threaded if crossOriginIsolated
+
+      // Create FFmpeg instance and pipe logs to status div
+      const ffmpeg = new FFmpegWASM.FFmpeg();
+      ffmpeg.on('log', ({ message }) => {
+        statusEl.textContent = message;
+      });
+
+      try {
+        if (useThreads && window.crossOriginIsolated) {
+          statusEl.textContent = 'Loading FFmpeg (multi-threaded)...';
+          console.log('multi-threaded');
+          await ffmpeg.load({
+            workerLoadURL: '/814.ffmpeg.js',
+            coreURL:        '/ffmpeg-core.js',
+            wasmURL:        '/ffmpeg-core.wasm',
+            workerURL:      '/ffmpeg-core.worker.js'
+          });
+        } else {
+          statusEl.textContent = 'Loading FFmpeg (single-threaded)...';
+          console.log('single-threaded');
+          await ffmpeg.load({
+            workerLoadURL: '/814.ffmpeg.js',
+            coreURL:        '/ffmpeg-core.js',
+            wasmURL:        '/ffmpeg-core.wasm'
+          });
+        }
+
+        statusEl.textContent = 'FFmpeg loaded successfully';
+        runBtn.disabled = false;
+      } catch (err) {
+        console.error('Failed to load FFmpeg', err);
+        statusEl.textContent = 'Error loading FFmpeg';
+      }
+    }
+
+    // Kick off loading on page load
+    window.addEventListener('DOMContentLoaded', initializeFFmpeg);
+  </script>
+</body>
+</html>

@@ -62,13 +62,14 @@ const toBlobURL = async (url, mimeType, cb) => {
 
 
 function log(message) {
-    document.getElementById("tty")
-        .innerHTML = document.getElementById("tty")
-        .innerHTML + "</br>" + message;
-    window.scrollTo({
-        top: document.body.scrollHeight,
-        behavior: 'smooth' // 使滚动平滑
-    });
+    console.log(message);
+    //document.getElementById("tty")
+    //    .innerHTML = document.getElementById("tty")
+    //    .innerHTML + "</br>" + message;
+    //window.scrollTo({
+    //    top: document.body.scrollHeight,
+    //    behavior: 'smooth' // 使滚动平滑
+    //});
 }
 
 function cleanLog() {

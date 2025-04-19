@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>FFmpeg v12 UMD Trim Example</title>
+  <!-- Load UMD bundles from public/ffmpeg -->
+  <script src="/ffmpeg/util.js"></script>
+  <script src="/ffmpeg/ffmpeg.js"></script>
+</head>
+<body>
+  <h3>Trim First 1 Second of Uploaded Video</h3>
+  <video id="output-video" controls style="max-width: 100%;"></video><br>
+  <input type="file" id="uploader">
+  <p id="message"></p>
+
+  <script>
+    (async () => {
+      const { FFmpeg }    = FFmpegWASM;
+      const { fetchFile } = FFmpegUtil;
+      const ffmpeg = new FFmpeg({ log: true });
+
+      const msgEl = document.getElementById('message');
+      msgEl.textContent = 'Loading FFmpeg core...';
+
+      // Load core, wasm and worker from local /ffmpeg
+      await ffmpeg.load({
+        workerLoadURL: '/ffmpeg/814.ffmpeg.js',
+        coreURL:       '/ffmpeg/ffmpeg-core.js',
+        wasmURL:       '/ffmpeg/ffmpeg-core.wasm',
+        workerURL:     '/ffmpeg/ffmpeg-core.worker.js'
+      });
+
+      msgEl.textContent = 'FFmpeg ready';
+
+      document.getElementById('uploader').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        msgEl.textContent = 'Reading file...';
+        const data = await fetchFile(file);
+
+        msgEl.textContent = 'Writing to FS...';
+        await ffmpeg.writeFile(file.name, data);
+
+        msgEl.textContent = 'Trimming...';
+        await ffmpeg.exec(['-i', file.name, '-ss', '0', '-to', '1', 'out.mp4']);
+
+        msgEl.textContent = 'Loading result...';
+        const result = await ffmpeg.readFile('out.mp4');
+
+        const url = URL.createObjectURL(
+          new Blob([result.buffer], { type: 'video/mp4' })
+        );
+        document.getElementById('output-video').src = url;
+        msgEl.textContent = 'Done!';
+      });
+    })();
+  </script>
+</body>
+</html>

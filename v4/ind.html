@@ -25,15 +25,26 @@
         </div>
       </div>
 
-      <div class="box" id="tty"></div>
+      <!-- terminal output -->
+      <div
+        id="tty"
+        class="box is-family-monospace is-overflow-auto"
+        style="height: 200px;"
+      ></div>
       <div id="outputLabel" class="has-text-weight-bold mt-4"></div>
 
+      <!-- metadata -->
       <div id="metadataContainer" class="mt-4">
         <h2 class="subtitle">Video Metadata</h2>
         <ul id="metadataList"></ul>
       </div>
 
-      <div id="thumbnailsContainer" class="mt-4"></div>
+      <!-- thumbnails -->
+      <div
+        id="thumbnailsContainer"
+        class="box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto"
+        style="column-gap: .5rem;"
+      ></div>
     </div>
   </section>
 
@@ -122,9 +133,13 @@
           for (let i = 1; i <= NUM_THUMBNAILS; i++) {
             const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
             const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
+            // wrap each img in a Bulma image container
+            const figure = document.createElement('figure');
+            figure.className = 'image is-128x128 m-2';
             const img = document.createElement('img');
             img.src = url;
-            thumbnailsContainer.appendChild(img);
+            figure.appendChild(img);
+            thumbnailsContainer.appendChild(figure);
           }
         }
 

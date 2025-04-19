@@ -1,0 +1,4 @@
+[[headers]]
+  for = "/ffmpeg/*.map"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"

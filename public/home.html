@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FFmpeg.wasm Netlify Test</title>
+</head>
+<body>
+  <h1>FFmpeg.wasm Netlify Test</h1>
+  <button id="load-btn">Load FFmpeg</button>
+  <p id="status">Not loaded</p>
+
+  <script type="module">
+    import { createFFmpeg } from '/ffmpeg/ffmpeg.mjs';
+
+    const ffmpeg = createFFmpeg({
+      corePath: '/ffmpeg/ffmpeg-core.js',
+      log: true
+    });
+
+    document.getElementById('load-btn').addEventListener('click', async () => {
+      document.getElementById('status').textContent = 'Loading...';
+      await ffmpeg.load();
+      document.getElementById('status').textContent = 'FFmpeg loaded!';
+    });
+  </script>
+</body>
+</html>

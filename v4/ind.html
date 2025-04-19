@@ -25,26 +25,15 @@
         </div>
       </div>
 
-      <!-- terminal output -->
-      <div
-        id="tty"
-        class="box is-family-monospace is-overflow-auto"
-        style="height: 200px;"
-      ></div>
-      <div id="outputLabel" class="has-text-weight-bold mt-4"></div>
+      <div id="tty" class="box is-family-monospace is-overflow-auto" style="height: 200px;"></div>
+      <div id="outputLabel" class="mt-4"></div>
 
-      <!-- metadata -->
       <div id="metadataContainer" class="mt-4">
         <h2 class="subtitle">Video Metadata</h2>
         <ul id="metadataList"></ul>
       </div>
 
-      <!-- thumbnails -->
-      <div
-        id="thumbnailsContainer"
-        class="box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto"
-        style="column-gap: .5rem;"
-      ></div>
+      <div id="thumbnailsContainer" class="box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto" style="gap: 0.25rem;"></div>
     </div>
   </section>
 
@@ -91,7 +80,7 @@
         thumbnailsContainer.replaceChildren();
         metadataList.replaceChildren();
         document.getElementById('tty').textContent = '';
-        outputLabel.textContent = '';
+        outputLabel.innerHTML = '';
 
         console.log('Preparing workspace');
         await ffmpeg.createDir(inputDir);
@@ -107,7 +96,11 @@
 
         console.log('Validating video against minimum requirements');
         if (!validateVideo(metadata)) {
-          outputLabel.textContent = 'Video does not meet the minimum requirements';
+          outputLabel.innerHTML = `
+            <div class="notification is-warning is-light">
+              <strong>Warning:</strong> Video does not meet the minimum requirements.
+            </div>
+          `;
           await ffmpeg.unmount(inputDir);
           await ffmpeg.deleteDir(inputDir);
           return;
@@ -126,20 +119,23 @@
         const ret = await ffmpeg.exec(thumbnailArgs);
 
         if (ret !== 0) {
-          outputLabel.textContent = 'Error generating thumbnails. See console for details.';
+          outputLabel.innerHTML = `
+            <div class="notification is-danger is-light">
+              <strong>Error:</strong> Thumbnail generation failed. See console for details.
+            </div>
+          `;
           console.error('Thumbnail generation failed with code', ret);
         } else {
           console.log('Thumbnails generated');
           for (let i = 1; i <= NUM_THUMBNAILS; i++) {
             const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
             const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
-            // wrap each img in a Bulma image container
-            const figure = document.createElement('figure');
-            figure.className = 'image is-128x128 m-2';
             const img = document.createElement('img');
             img.src = url;
-            figure.appendChild(img);
-            thumbnailsContainer.appendChild(figure);
+            img.className = 'mr-2';
+            img.style.width = '120px';
+            img.style.height = 'auto';
+            thumbnailsContainer.appendChild(img);
           }
         }
 
@@ -148,7 +144,11 @@
         console.log('Cleaning up');
       } catch (error) {
         console.error(error);
-        outputLabel.textContent = 'Error extracting segment.';
+        outputLabel.innerHTML = `
+          <div class="notification is-danger is-light">
+            <strong>Error:</strong> An error occurred while extracting the segment.
+          </div>
+        `;
       }
     }
 
@@ -156,7 +156,11 @@
       const [h, m, s] = d.split(':').map(Number);
       return h * 3600 + m * 60 + s;
     }
-    function calculateInterval(d, count) { return d / count; }
+
+    function calculateInterval(d, count) {
+      return d / count;
+    }
+
     function extractMetadataFromLog(log) {
       const md = {};
       const dm = log.match(/Duration: (\d{2}:\d{2}:\d{2})\.(\d+)/);
@@ -173,15 +177,26 @@
       if (am) md['Audio Codec'] = am[1];
       return md;
     }
+
     function validateVideo(meta) {
       const d = convertDurationToSeconds(meta.Duration);
-      if (d < MIN_DURATION_SECONDS) { alert(`Video too short: ${d}s (min ${MIN_DURATION_SECONDS}s).`); return false; }
+      if (d < MIN_DURATION_SECONDS) {
+        alert(`Video too short: ${d}s (min ${MIN_DURATION_SECONDS}s).`);
+        return false;
+      }
       const fps = parseFloat(meta.Framerate);
-      if (fps < MIN_FPS) { alert(`Frame rate too low: ${fps} fps (min ${MIN_FPS} fps).`); return false; }
+      if (fps < MIN_FPS) {
+        alert(`Frame rate too low: ${fps} fps (min ${MIN_FPS} fps).`);
+        return false;
+      }
       const [w, h] = meta.Resolution.split('x').map(Number);
-      if (w < MIN_RES_WIDTH || h < MIN_RES_HEIGHT) { alert(`Resolution too low: ${w}x${h} (min ${MIN_RES_WIDTH}:${MIN_RES_HEIGHT}).`); return false; }
+      if (w < MIN_RES_WIDTH || h < MIN_RES_HEIGHT) {
+        alert(`Resolution too low: ${w}x${h} (min ${MIN_RES_WIDTH}x${MIN_RES_HEIGHT}).`);
+        return false;
+      }
       return true;
     }
+
     function displayMetadata(metadata) {
       const list = document.getElementById('metadataList');
       list.replaceChildren();

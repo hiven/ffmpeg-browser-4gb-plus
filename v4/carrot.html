@@ -61,7 +61,21 @@
         : '';
     }
 
+    async function cleanUpFFmpeg() {
+      try {
+        await ffmpeg.exit();
+      } catch (err) {
+        console.warn('FFmpeg exit failed or not needed:', err);
+      }
+      try {
+        await ffmpeg.load(); // Reinitialise to clear corrupted state
+      } catch (err) {
+        console.warn('FFmpeg load failed on cleanup:', err);
+      }
+    }
+
     async function runCommand() {
+      const runButton = document.getElementById('runButton');
       const fileInput = document.getElementById('fileInput');
 
       if (!fileInput.files.length) {
@@ -69,7 +83,9 @@
         return;
       }
 
+      runButton.disabled = true;
       showAlert('Processing…', 'is-light');
+
       const file = fileInput.files[0];
       const inputDir = '/input';
       const inputFile = `${inputDir}/${file.name}`;
@@ -94,6 +110,8 @@
           showAlert(validationErrors.join('<br/>'), 'is-warning');
           await ffmpeg.unmount(inputDir);
           await ffmpeg.deleteDir(inputDir);
+          await cleanUpFFmpeg();
+          runButton.disabled = false;
           return;
         }
 
@@ -110,36 +128,50 @@
         const ret = await ffmpeg.exec(thumbnailArgs);
 
         if (ret !== 0) {
-          const errorOutput = ffmpegLogs
+          let errorOutput = ffmpegLogs
             .filter(line => line.toLowerCase().includes('error'))
-            .join('<br/>') || 'Thumbnail generation failed due to unknown error.';
-          showAlert(errorOutput, 'is-danger');
-        } else {
-          const thumbnailsContainer = document.createElement('div');
-          thumbnailsContainer.id = 'thumbnailsContainer';
-          thumbnailsContainer.className = 'box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto';
-          thumbnailsContainer.style.gap = '0.25rem';
-          document.querySelector('.container').appendChild(thumbnailsContainer);
+            .join('<br/>');
 
-          for (let i = 1; i <= NUM_THUMBNAILS; i++) {
-            const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
-            const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
-            const img = document.createElement('img');
-            img.src = url;
-            img.className = 'mr-2';
-            img.style.width = '120px';
-            img.style.height = 'auto';
-            thumbnailsContainer.appendChild(img);
+          if (!errorOutput) {
+            const tail = ffmpegLogs.slice(-5).join('<br/>');
+            errorOutput = 'Thumbnail generation failed. Recent log output:<br/>' + tail;
           }
-          showAlert('Thumbnails generated successfully!', 'is-success');
+
+          showAlert(errorOutput, 'is-danger');
+          await ffmpeg.unmount(inputDir);
+          await ffmpeg.deleteDir(inputDir);
+          await cleanUpFFmpeg();
+          runButton.disabled = false;
+          return;
         }
 
+        const thumbnailsContainer = document.createElement('div');
+        thumbnailsContainer.id = 'thumbnailsContainer';
+        thumbnailsContainer.className = 'box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto';
+        thumbnailsContainer.style.gap = '0.25rem';
+        document.querySelector('.container').appendChild(thumbnailsContainer);
+
+        for (let i = 1; i <= NUM_THUMBNAILS; i++) {
+          const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
+          const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
+          const img = document.createElement('img');
+          img.src = url;
+          img.className = 'mr-2';
+          img.style.width = '120px';
+          img.style.height = 'auto';
+          thumbnailsContainer.appendChild(img);
+        }
+
+        showAlert('Thumbnails generated successfully!', 'is-success');
         await ffmpeg.unmount(inputDir);
         await ffmpeg.deleteDir(inputDir);
       } catch (error) {
-        console.error(error);
+        console.error('Exception caught:', error);
         showAlert('An error occurred while processing the video.', 'is-danger');
+        await cleanUpFFmpeg();
       }
+
+      runButton.disabled = false;
     }
 
     function convertDurationToSeconds(d) {

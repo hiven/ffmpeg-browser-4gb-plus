@@ -29,7 +29,7 @@
 
       <div id="outputLabel" class="mt-4"></div>
 
-      <div id="thumbnailsContainer" class="box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto" style="gap: 0.25rem;"></div>
+      <!-- Note: thumbnailsContainer will be created dynamically in JS -->
     </div>
   </section>
 
@@ -65,7 +65,6 @@
 
     async function runCommand() {
       const fileInput = document.getElementById('fileInput');
-      const thumbnailsContainer = document.getElementById('thumbnailsContainer');
 
       if (!fileInput.files.length) {
         showAlert('Please select a file.', 'is-warning');
@@ -79,7 +78,9 @@
       ffmpegLogs.length = 0;
 
       try {
-        thumbnailsContainer.replaceChildren();
+        const existingContainer = document.getElementById('thumbnailsContainer');
+        if (existingContainer) existingContainer.remove();
+
         document.getElementById('outputLabel').innerHTML = '';
 
         await ffmpeg.createDir(inputDir);
@@ -112,6 +113,13 @@
         if (ret !== 0) {
           showAlert('Thumbnail generation failed. See console for details.', 'is-danger');
         } else {
+          // Create and add thumbnail container to the DOM
+          const thumbnailsContainer = document.createElement('div');
+          thumbnailsContainer.id = 'thumbnailsContainer';
+          thumbnailsContainer.className = 'box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto';
+          thumbnailsContainer.style.gap = '0.25rem';
+          document.querySelector('.container').appendChild(thumbnailsContainer);
+
           for (let i = 1; i <= NUM_THUMBNAILS; i++) {
             const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
             const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));

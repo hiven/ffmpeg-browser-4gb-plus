@@ -12,6 +12,9 @@
     <div class="container">
       <h1 class="title">FFmpeg Segment Extractor</h1>
 
+      <!-- Notification area -->
+      <div id="alertArea" class="mb-4"></div>
+
       <div class="field">
         <label class="label">Upload a Video File</label>
         <div class="control">
@@ -56,8 +59,18 @@
         document.getElementById('runButton').disabled = false;
       } catch (error) {
         console.error('Failed to load FFmpeg');
-        alert('Error loading FFmpeg.');
+        showAlert('Error loading FFmpeg.', 'is-danger');
       }
+    }
+
+    function showAlert(message, type = 'is-info') {
+      const alertArea = document.getElementById('alertArea');
+      alertArea.innerHTML = `
+        <div class="notification ${type} is-light">
+          <button class="delete" onclick="this.parentElement.remove()"></button>
+          ${message}
+        </div>
+      `;
     }
 
     async function runCommand() {
@@ -67,7 +80,7 @@
       const metadataList = document.getElementById('metadataList');
 
       if (!fileInput.files.length) {
-        alert('Please select a file.');
+        showAlert('Please select a file.', 'is-warning');
         return;
       }
 
@@ -81,6 +94,7 @@
         metadataList.replaceChildren();
         document.getElementById('tty').textContent = '';
         outputLabel.innerHTML = '';
+        showAlert('', ''); // clear any previous alert
 
         console.log('Preparing workspace');
         await ffmpeg.createDir(inputDir);
@@ -96,11 +110,7 @@
 
         console.log('Validating video against minimum requirements');
         if (!validateVideo(metadata)) {
-          outputLabel.innerHTML = `
-            <div class="notification is-warning is-light">
-              <strong>Warning:</strong> Video does not meet the minimum requirements.
-            </div>
-          `;
+          showAlert('Video does not meet the minimum requirements.', 'is-warning');
           await ffmpeg.unmount(inputDir);
           await ffmpeg.deleteDir(inputDir);
           return;
@@ -119,11 +129,7 @@
         const ret = await ffmpeg.exec(thumbnailArgs);
 
         if (ret !== 0) {
-          outputLabel.innerHTML = `
-            <div class="notification is-danger is-light">
-              <strong>Error:</strong> Thumbnail generation failed. See console for details.
-            </div>
-          `;
+          showAlert('Thumbnail generation failed. See console for details.', 'is-danger');
           console.error('Thumbnail generation failed with code', ret);
         } else {
           console.log('Thumbnails generated');
@@ -137,6 +143,7 @@
             img.style.height = 'auto';
             thumbnailsContainer.appendChild(img);
           }
+          showAlert('Thumbnails generated successfully!', 'is-success');
         }
 
         await ffmpeg.unmount(inputDir);
@@ -144,11 +151,7 @@
         console.log('Cleaning up');
       } catch (error) {
         console.error(error);
-        outputLabel.innerHTML = `
-          <div class="notification is-danger is-light">
-            <strong>Error:</strong> An error occurred while extracting the segment.
-          </div>
-        `;
+        showAlert('An error occurred while extracting the segment.', 'is-danger');
       }
     }
 

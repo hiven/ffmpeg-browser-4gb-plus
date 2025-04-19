@@ -1,0 +1,15 @@
+{
+  "name": "your-project-name",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "your-build-command"
+  },
+  "dependencies": {
+    "@ffmpeg/ffmpeg": "0.12.6",
+    "@ffmpeg/core": "0.12.6"
+  },
+  "devDependencies": {
+    "netlify-plugin-copy": "^1.0.0"
+  }
+}

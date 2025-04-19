@@ -181,17 +181,17 @@
     function validateVideo(meta) {
       const d = convertDurationToSeconds(meta.Duration);
       if (d < MIN_DURATION_SECONDS) {
-        alert(`Video too short: ${d}s (min ${MIN_DURATION_SECONDS}s).`);
+        console.warn(`Video too short: ${d}s (minimum required: ${MIN_DURATION_SECONDS}s)`);
         return false;
       }
       const fps = parseFloat(meta.Framerate);
       if (fps < MIN_FPS) {
-        alert(`Frame rate too low: ${fps} fps (min ${MIN_FPS} fps).`);
+        console.warn(`Frame rate too low: ${fps} fps (minimum required: ${MIN_FPS} fps)`);
         return false;
       }
       const [w, h] = meta.Resolution.split('x').map(Number);
       if (w < MIN_RES_WIDTH || h < MIN_RES_HEIGHT) {
-        alert(`Resolution too low: ${w}x${h} (min ${MIN_RES_WIDTH}x${MIN_RES_HEIGHT}).`);
+        console.warn(`Resolution too low: ${w}x${h} (minimum required: ${MIN_RES_WIDTH}x${MIN_RES_HEIGHT})`);
         return false;
       }
       return true;

@@ -1,6 +1,4 @@
+# netlify.toml
 [build]
   command = "npm run build"
   publish = "public"
-
-[[plugins]]
-  package = "@netlify/build"

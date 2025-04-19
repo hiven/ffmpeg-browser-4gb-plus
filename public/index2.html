@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!-- 1) Load the UMD bundles from your /ffmpeg folder -->
+  <script src="/ffmpeg/util.js"></script>
+  <script src="/ffmpeg/ffmpeg.js"></script>
+</head>
+<body>
+  <h3>Upload & Transcode First 1 Second to MP4</h3>
+  <video id="output-video" controls style="max-width: 100%;"></video><br/>
+  <input type="file" id="uploader">
+  <p id="message"></p>
+
+  <script>
+    (async () => {
+      // 2) Grab the two globals
+      const { fetchFile } = FFmpegUtil;
+      const { FFmpeg    } = FFmpegWASM;
+
+      // 3) Instantiate and load from local assets
+      const ffmpeg = new FFmpeg({ log: true });
+      document.getElementById('message').textContent = 'Loading FFmpeg…';
+      await ffmpeg.load({
+        coreURL:  '/ffmpeg/ffmpeg-core.js',
+        wasmURL:  '/ffmpeg/ffmpeg-core.wasm',
+        workerURL:'/ffmpeg/ffmpeg-core.worker.js'
+      });
+      document.getElementById('message').textContent = 'Ready to transcode';
+
+      // 4) On file‑select, run the same fetch→write→exec→read→play steps
+      document.getElementById('uploader').addEventListener('change', async (e) => {
+        const file    = e.target.files[0];
+        const message = document.getElementById('message');
+
+        // a) Load the file into memory via FFmpegUtil
+        message.textContent = 'Loading source file…';
+        const data = await fetchFile(file);
+
+        // b) Write into FFmpeg’s in‑memory FS
+        await ffmpeg.writeFile(file.name, data);
+
+        // c) Run your FFmpeg command (trim first second here)
+        message.textContent = 'Trimming…';
+        await ffmpeg.exec([
+          '-i', file.name,
+          '-ss', '0',
+          '-to', '1',
+          'output.mp4'
+        ]);
+
+        // d) Read the result back out
+        message.textContent = 'Finishing…';
+        const result = await ffmpeg.readFile('output.mp4');
+
+        // e) Wrap in a Blob and hand to the <video> element
+        const url = URL.createObjectURL(
+          new Blob([result.buffer], { type: 'video/mp4' })
+        );
+        document.getElementById('output-video').src = url;
+        message.textContent = 'Done!';
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -73,7 +73,7 @@ function log(message) {
 }
 
 function cleanLog() {
-    document.getElementById("tty").innerHTML = "";
+    //document.getElementById("tty").innerHTML = "";
 }
 
 const load = async (threadMode, cb) => {

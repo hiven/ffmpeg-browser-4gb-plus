@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FFmpeg Segment Extractor</title>
+  <script src="common.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css"/>
+</head>
+<body>
+  <section class="section">
+    <div class="container">
+      <h1 class="title">FFmpeg Segment Extractor</h1>
+
+      <div id="alertArea" class="mb-4"></div>
+
+      <div class="field">
+        <label class="label">Upload a Video File</label>
+        <div class="control">
+          <input class="input" type="file" id="fileInput" accept="video/*"/>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="control">
+          <button class="button is-primary" id="runButton" disabled>Extract Segment</button>
+        </div>
+      </div>
+
+      <div id="outputLabel" class="mt-4"></div>
+
+      <!-- thumbnailsContainer will be added dynamically -->
+    </div>
+  </section>
+
+  <script>
+    const NUM_THUMBNAILS = 20;
+    const CROP_WIDTH = 300;
+    const CROP_HEIGHT = 300;
+    const MIN_FPS = 15;
+    const MIN_RES_WIDTH = 640;
+    const MIN_RES_HEIGHT = 360;
+    const MIN_DURATION_SECONDS = 5;
+
+    async function initializeFFmpeg() {
+      try {
+        await load(false, progress => {
+          const pct = Math.round((progress.received / progress.total) * 100);
+          console.log(`Loading FFmpeg: ${pct}%`);
+        });
+        console.log('FFmpeg loaded successfully');
+        document.getElementById('runButton').disabled = false;
+      } catch (error) {
+        console.error('Failed to load FFmpeg');
+        showAlert('Error loading FFmpeg.', 'is-danger');
+      }
+    }
+
+    function showAlert(message, type = 'is-info') {
+      const alertArea = document.getElementById('alertArea');
+      alertArea.innerHTML = message
+        ? `<div class="notification ${type} is-light">${message}</div>`
+        : '';
+    }
+
+    async function runCommand() {
+      const fileInput = document.getElementById('fileInput');
+
+      if (!fileInput.files.length) {
+        showAlert('Please select a file.', 'is-warning');
+        return;
+      }
+
+      showAlert('Processing…', 'is-light');
+      const file = fileInput.files[0];
+      const inputDir = '/input';
+      const inputFile = `${inputDir}/${file.name}`;
+      ffmpegLogs.length = 0;
+
+      try {
+        const existingContainer = document.getElementById('thumbnailsContainer');
+        if (existingContainer) existingContainer.remove();
+
+        document.getElementById('outputLabel').innerHTML = '';
+
+        await ffmpeg.createDir(inputDir);
+        await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
+        await ffmpeg.exec(['-loglevel', 'info', '-i', inputFile]);
+
+        const logContent = ffmpegLogs.join('\n');
+        const metadata = extractMetadataFromLog(logContent);
+        displayMetadata(metadata);
+
+        const validationErrors = validateVideo(metadata);
+        if (validationErrors.length > 0) {
+          showAlert(validationErrors.join('<br/>'), 'is-warning');
+          await ffmpeg.unmount(inputDir);
+          await ffmpeg.deleteDir(inputDir);
+          return;
+        }
+
+        const durationInSeconds = convertDurationToSeconds(metadata.Duration);
+        const interval = calculateInterval(durationInSeconds, NUM_THUMBNAILS);
+        const thumbnailArgs = [
+          '-loglevel', 'error',
+          '-skip_frame', 'nokey',
+          '-i', inputFile,
+          '-vf', `fps=1/${interval},scale=${CROP_WIDTH}:${CROP_HEIGHT}:force_original_aspect_ratio=increase,crop=${CROP_WIDTH}:${CROP_HEIGHT}`,
+          '-flags2', 'fast', '-an', '-sn', '-dn',
+          '/thumbnail_%d.png'
+        ];
+        const ret = await ffmpeg.exec(thumbnailArgs);
+
+        if (ret !== 0) {
+          showAlert('Thumbnail generation failed. See console for details.', 'is-danger');
+        } else {
+          const thumbnailsContainer = document.createElement('div');
+          thumbnailsContainer.id = 'thumbnailsContainer';
+          thumbnailsContainer.className = 'box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto';
+          thumbnailsContainer.style.gap = '0.25rem';
+          document.querySelector('.container').appendChild(thumbnailsContainer);
+
+          for (let i = 1; i <= NUM_THUMBNAILS; i++) {
+            const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
+            const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
+            const img = document.createElement('img');
+            img.src = url;
+            img.className = 'mr-2';
+            img.style.width = '120px';
+            img.style.height = 'auto';
+            thumbnailsContainer.appendChild(img);
+          }
+          showAlert('Thumbnails generated successfully!', 'is-success');
+        }
+
+        await ffmpeg.unmount(inputDir);
+        await ffmpeg.deleteDir(inputDir);
+      } catch (error) {
+        console.error(error);
+        showAlert('An error occurred while processing the video.', 'is-danger');
+      }
+    }
+
+    function convertDurationToSeconds(d) {
+      if (!d || typeof d !== 'string') {
+        console.warn('Invalid duration:', d);
+        return 0;
+      }
+      const [h, m, s] = d.split(':').map(Number);
+      return h * 3600 + m * 60 + s;
+    }
+
+    function calculateInterval(d, count) {
+      return d / count;
+    }
+
+    function extractMetadataFromLog(log) {
+      const md = {};
+      const dm = log.match(/Duration:\s*(\d{2}:\d{2}:\d{2})\.(\d+)/);
+      const bm = log.match(/bitrate:\s*(\d+ kb\/s)/);
+      const rm = log.match(/, (\d{3,5}x\d{3,5})/);
+      const fm = log.match(/(\d+(\.\d+)?) fps/);
+      const vm = log.match(/Video: ([^,]+)/);
+      const am = log.match(/Audio: ([^,]+)/);
+      if (dm) md.Duration = `${dm[1]}.${dm[2]}`;
+      if (bm) md.Bitrate = bm[1];
+      if (rm) md.Resolution = rm[1];
+      if (fm) md.Framerate = `${fm[1]} fps`;
+      if (vm) md['Video Codec'] = vm[1];
+      if (am) md['Audio Codec'] = am[1];
+      return md;
+    }
+
+    function validateVideo(meta) {
+      const errors = [];
+      const d = convertDurationToSeconds(meta.Duration);
+      if (d < MIN_DURATION_SECONDS) {
+        errors.push(`Duration too short (${d}s). Minimum is ${MIN_DURATION_SECONDS}s.`);
+      }
+
+      const fps = parseFloat(meta.Framerate);
+      if (fps < MIN_FPS) {
+        errors.push(`Frame rate too low (${fps} fps). Minimum is ${MIN_FPS} fps.`);
+      }
+
+      const [w, h] = meta.Resolution.split('x').map(Number);
+      if (w < MIN_RES_WIDTH || h < MIN_RES_HEIGHT) {
+        errors.push(`Resolution too low (${w}x${h}). Minimum is ${MIN_RES_WIDTH}x${MIN_RES_HEIGHT}.`);
+      }
+
+      return errors;
+    }
+
+    function displayMetadata(metadata) {
+      Object.entries(metadata).forEach(([k, v]) => {
+        console.log(`${k}: ${v}`);
+      });
+    }
+
+    document.getElementById('runButton').addEventListener('click', runCommand);
+    initializeFFmpeg();
+  </script>
+</body>
+</html>

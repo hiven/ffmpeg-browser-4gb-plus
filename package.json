@@ -1,15 +1,13 @@
 {
-  "name": "your-project-name",
+  "name": "my-ffmpeg-app",
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "your-build-command"
+    "copy-ffmpeg": "mkdir -p public/ffmpeg && cp -R node_modules/@ffmpeg/ffmpeg/dist/umd/* public/ffmpeg/ && cp -R node_modules/@ffmpeg/core/dist/umd/* public/ffmpeg/",
+    "build": "npm run copy-ffmpeg"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "0.12.6",
     "@ffmpeg/core": "0.12.6"
-  },
-  "devDependencies": {
-    "netlify-plugin-copy": "^1.0.0"
   }
 }

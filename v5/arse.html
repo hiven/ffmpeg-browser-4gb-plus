@@ -55,9 +55,9 @@
   </section>
 
   <script>
-    // ----------------------------
-    // Constants
-    // ----------------------------
+    /* ------------------------------------------------------------------
+       Constants
+    ------------------------------------------------------------------ */
     const CLIP_LENGTH_SHORT  = 20;
     const CLIP_LENGTH_MEDIUM = 40;
     const CLIP_LENGTH_LONG   = 60;
@@ -69,212 +69,95 @@
     const MIN_RES_WIDTH    = 640;
     const MIN_RES_HEIGHT   = 360;
 
-    // ----------------------------
-    // Utility – tidy FS clean‑up
-    // ----------------------------
+    /* ------------------------------------------------------------------
+       Generic helpers
+    ------------------------------------------------------------------ */
     async function cleanupDir (dir) {
       try { await ffmpeg.unmount(dir); } catch (_) {}
       try { await ffmpeg.deleteDir(dir); } catch (_) {}
     }
 
-    async function initializeFFmpeg () {
-      try {
-        await load(false, progress => {
-          const pct = Math.round((progress.received / progress.total) * 100);
-          console.log(`Loading FFmpeg: ${pct}%`);
-        });
-        console.log('FFmpeg loaded successfully');
-      } catch (error) {
-        console.error('Failed to load FFmpeg');
-        showAlert('Error loading FFmpeg.', 'is-danger');
+    async function cleanupThumbnails () {
+      for (let i = 1; i <= NUM_THUMBNAILS; i++) {
+        try { await ffmpeg.deleteFile(`/thumbnail_${i}.png`); } catch (_) {}
       }
     }
 
     function showAlert (message, type = 'is-info') {
-      const alertArea = document.getElementById('alertArea');
+      const alertArea     = document.getElementById('alertArea');
       alertArea.innerHTML = message
         ? `<div class="notification ${type} is-light">${message}</div>`
         : '';
     }
 
-    function displayMetadata (metadata) {
-      Object.entries(metadata).forEach(([k, v]) => console.log(`${k}: ${v}`));
+    /* ------------------------------------------------------------------
+       FFmpeg initialisation
+    ------------------------------------------------------------------ */
+    async function initializeFFmpeg () {
+      try {
+        await load(false, p => {
+          const pct = Math.round((p.received / p.total) * 100);
+          console.log(`Loading FFmpeg: ${pct}%`);
+        });
+        console.info('FFmpeg loaded');
+      } catch (err) {
+        console.error('Failed to load FFmpeg', err);
+        showAlert('Error loading FFmpeg.', 'is-danger');
+      }
     }
 
-    function setupClipControls (durationInSeconds) {
-      const clipWrapper      = document.getElementById('clipControlWrapper');
-      const clipInput        = document.getElementById('clipStartInput');
-      const clipLengthSelect = document.getElementById('clipLengthSelect');
-      const clipLabel        = document.getElementById('clipTimeRange');
+    /* ------------------------------------------------------------------
+       Clip control UI
+    ------------------------------------------------------------------ */
+    function setupClipControls (duration) {
+      const wrapper  = document.getElementById('clipControlWrapper');
+      const startInp = document.getElementById('clipStartInput');
+      const lenSel   = document.getElementById('clipLengthSelect');
+      const rangeLbl = document.getElementById('clipTimeRange');
 
-      const validLengths = [CLIP_LENGTH_LONG, CLIP_LENGTH_MEDIUM, CLIP_LENGTH_SHORT]
-        .filter(length => durationInSeconds >= length);
-      let clipLength = validLengths[0];
+      const valid = [CLIP_LENGTH_LONG, CLIP_LENGTH_MEDIUM, CLIP_LENGTH_SHORT]
+        .filter(l => duration >= l);
+      let clipLen = valid[0];
 
-      clipLengthSelect.value = String(clipLength);
-      clipInput.value        = 0;
+      lenSel.value = String(clipLen);
+      startInp.value = 0;
 
-      Array.from(clipLengthSelect.options).forEach(opt => {
-        const val = Number(opt.value);
-        opt.disabled = !validLengths.includes(val);
-        opt.selected = val === clipLength;
+      [...lenSel.options].forEach(o => {
+        const v = Number(o.value);
+        o.disabled = !valid.includes(v);
+        o.selected = v === clipLen;
       });
 
-      function updateClipRangeDisplay () {
-        const maxStart   = Math.floor(durationInSeconds - clipLength);
-        const startValue = Math.min(Math.max(0, Number(clipInput.value)), maxStart);
-        clipInput.value  = startValue;
-        clipInput.max    = maxStart;
-        clipInput.setAttribute('max', String(maxStart)); // ensure browser‑level clamping
-        clipLabel.textContent = `Showing ${startValue}s to ${startValue + clipLength}s`;
-      }
+      const refresh = () => {
+        const max     = Math.floor(duration - clipLen);
+        const current = Math.min(Math.max(0, Number(startInp.value)), max);
+        startInp.value = current;
+        startInp.max   = max;
+        startInp.setAttribute('max', String(max));
+        rangeLbl.textContent = `Showing ${current}s to ${current + clipLen}s`;
+      };
 
-      if (durationInSeconds > CLIP_LENGTH_SHORT) {
-        clipWrapper.style.display = 'block';
-        updateClipRangeDisplay();
-
-        clipLengthSelect.onchange = () => {
-          clipLength = Number(clipLengthSelect.value);
-          updateClipRangeDisplay();
-        };
-
-        clipInput.oninput = updateClipRangeDisplay;
+      if (duration > CLIP_LENGTH_SHORT) {
+        wrapper.style.display = 'block';
+        refresh();
+        lenSel.onchange  = () => { clipLen = Number(lenSel.value); refresh(); };
+        startInp.oninput = refresh;
       } else {
-        clipWrapper.style.display = 'none';
+        wrapper.style.display = 'none';
       }
     }
 
-    // ----------------------------
-    // File validation
-    // ----------------------------
-    async function handleFileValidation (file) {
-      const inputDir  = '/input';
-      const inputFile = `${inputDir}/${file.name}`;
-      ffmpegLogs.length = 0;
-      window.validatedFile = null;
-
-      await cleanupDir(inputDir); // tidy any previous artefacts first
-
-      const existingContainer = document.getElementById('thumbnailsContainer');
-      if (existingContainer) existingContainer.remove();
-
-      try {
-        await ffmpeg.createDir(inputDir);
-        await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
-        await ffmpeg.exec(['-loglevel', 'info', '-i', inputFile]);
-
-        const metadata = extractMetadataFromLog(ffmpegLogs.join('\n'));
-        displayMetadata(metadata);
-
-        const validationErrors = validateVideo(metadata);
-        if (validationErrors.length > 0) {
-          showAlert(validationErrors.join('<br/>'), 'is-warning');
-          document.getElementById('runButton').disabled = true;
-          return;
-        }
-
-        const duration = convertDurationToSeconds(metadata.Duration);
-        showAlert(`File is valid. Video duration is ${Math.round(duration)} seconds. You may now select your segment.`, 'is-success');
-        setupClipControls(duration);
-        document.getElementById('runButton').disabled = false;
-        window.validatedFile = { file, inputDir, inputFile, metadata };
-      } catch (err) {
-        console.error('Validation error:', err);
-        showAlert('An error occurred while validating the file.', 'is-danger');
-        document.getElementById('runButton').disabled = true;
-      } finally {
-        await cleanupDir(inputDir);
-      }
-    }
-
-    // ----------------------------
-    // Main processing command
-    // ----------------------------
-    async function runCommand () {
-      const runButton = document.getElementById('runButton');
-
-      if (!window.validatedFile) {
-        showAlert('Please select and validate a video file first.', 'is-warning');
-        return;
-      }
-
-      const { file, inputDir, inputFile, metadata } = window.validatedFile;
-
-      runButton.classList.add('is-loading');
-      runButton.disabled = true;
-      showAlert('Processing…', 'is-light');
-
-      try {
-        await ffmpeg.createDir(inputDir);
-        await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
-
-        const clipLength         = Number(document.getElementById('clipLengthSelect').value);
-        const durationInSeconds  = convertDurationToSeconds(metadata.Duration);
-
-        const existingContainer = document.getElementById('thumbnailsContainer');
-        if (existingContainer) existingContainer.remove();
-
-        const interval = Math.max(calculateInterval(durationInSeconds, NUM_THUMBNAILS), 1);
-        const thumbnailArgs = [
-          '-loglevel', 'error',
-          '-skip_frame', 'nokey',
-          '-i', inputFile,
-          '-vf', `fps=1/${interval},scale=${CROP_WIDTH}:${CROP_HEIGHT}:force_original_aspect_ratio=increase,crop=${CROP_WIDTH}:${CROP_HEIGHT}`,
-          '-flags2', 'fast', '-an', '-sn', '-dn',
-          '/thumbnail_%d.png'
-        ];
-        const ret = await ffmpeg.exec(thumbnailArgs);
-
-        if (ret !== 0) {
-          let errorOutput = ffmpegLogs.filter(line => line.toLowerCase().includes('error')).join('<br/>');
-          if (!errorOutput) {
-            const tail = ffmpegLogs.slice(-5).join('<br/>');
-            errorOutput = 'Thumbnail generation failed. Recent log output:<br/>' + tail;
-          }
-          showAlert(errorOutput, 'is-danger');
-          return;
-        }
-
-        const thumbnailsContainer = document.createElement('div');
-        thumbnailsContainer.id        = 'thumbnailsContainer';
-        thumbnailsContainer.className = 'box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto';
-        thumbnailsContainer.style.gap = '0.25rem';
-        document.querySelector('.container').appendChild(thumbnailsContainer);
-
-        for (let i = 1; i <= NUM_THUMBNAILS; i++) {
-          const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
-          const url  = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
-          const img  = document.createElement('img');
-          img.src    = url;
-          img.className = 'mr-2';
-          img.style.width  = '120px';
-          img.style.height = 'auto';
-          img.onload = () => URL.revokeObjectURL(url); // free memory once displayed
-          thumbnailsContainer.appendChild(img);
-        }
-
-        showAlert('Thumbnails generated successfully.', 'is-success');
-      } catch (error) {
-        console.error('Exception caught:', error);
-        showAlert('An error occurred while processing the video.', 'is-danger');
-      } finally {
-        await cleanupDir(inputDir);
-        runButton.classList.remove('is-loading');
-        runButton.disabled = false;
-      }
-    }
-
-    // ----------------------------
-    // Helpers
-    // ----------------------------
+    /* ------------------------------------------------------------------
+       Validation helpers
+    ------------------------------------------------------------------ */
     function convertDurationToSeconds (d) {
       if (!d || typeof d !== 'string' || !d.includes(':')) return 0;
       const [h = 0, m = 0, s = 0] = d.split(':').map(Number);
       return (h * 3600) + (m * 60) + s;
     }
 
-    function calculateInterval (d, count) {
-      return d / count;
+    function calculateInterval (dur, count) {
+      return dur / count;
     }
 
     function extractMetadataFromLog (log) {
@@ -285,10 +168,10 @@
       const fm = log.match(/(\d+(?:\.\d+)?) fps/);
       const vm = log.match(/Video: ([^,]+)/);
       const am = log.match(/Audio: ([^,]+)/);
-      if (dm) md.Duration      = `${dm[1]}.${dm[2]}`;
-      if (bm) md.Bitrate       = bm[1];
-      if (rm) md.Resolution    = rm[1];
-      if (fm) md.Framerate     = `${fm[1]} fps`;
+      if (dm) md.Duration       = `${dm[1]}.${dm[2]}`;
+      if (bm) md.Bitrate        = bm[1];
+      if (rm) md.Resolution     = rm[1];
+      if (fm) md.Framerate      = `${fm[1]} fps`;
       if (vm) md['Video Codec'] = vm[1];
       if (am) md['Audio Codec'] = am[1];
       return md;
@@ -296,8 +179,8 @@
 
     function validateVideo (meta) {
       const errors = [];
-      const d = convertDurationToSeconds(meta.Duration);
-      if (d < CLIP_LENGTH_SHORT) errors.push(`Duration too short (${d}s). Minimum is ${CLIP_LENGTH_SHORT}s.`);
+      const dur = convertDurationToSeconds(meta.Duration);
+      if (dur < CLIP_LENGTH_SHORT) errors.push(`Duration too short (${dur}s). Minimum is ${CLIP_LENGTH_SHORT}s.`);
 
       const fps = meta.Framerate ? parseFloat(meta.Framerate) : 0;
       if (fps && fps < MIN_FPS) errors.push(`Frame rate too low (${fps} fps). Minimum is ${MIN_FPS} fps.`);
@@ -306,16 +189,125 @@
       if (w < MIN_RES_WIDTH || h < MIN_RES_HEIGHT) {
         errors.push(`Resolution too low (${w}x${h}). Minimum is ${MIN_RES_WIDTH}x${MIN_RES_HEIGHT}.`);
       }
-
       return errors;
     }
 
-    // ----------------------------
-    // DOM Events
-    // ----------------------------
-    document.getElementById('fileInput').addEventListener('change', async (event) => {
-      const file = event.target.files[0];
-      if (file) await handleFileValidation(file);
+    /* ------------------------------------------------------------------
+       File validation flow
+    ------------------------------------------------------------------ */
+    async function handleFileValidation (file) {
+      const inputDir  = '/input';
+      const inputFile = `${inputDir}/${file.name}`;
+      ffmpegLogs.length = 0;
+      window.validatedFile = null;
+
+      await cleanupDir(inputDir);
+      await cleanupThumbnails();
+
+      document.getElementById('thumbnailsContainer')?.remove();
+
+      try {
+        await ffmpeg.createDir(inputDir);
+        await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
+        await ffmpeg.exec(['-loglevel', 'info', '-i', inputFile]);
+
+        const metadata = extractMetadataFromLog(ffmpegLogs.join('\n'));
+        console.table(metadata);
+
+        const issues = validateVideo(metadata);
+        if (issues.length) {
+          showAlert(issues.join('<br/>'), 'is-warning');
+          document.getElementById('runButton').disabled = true;
+          return;
+        }
+
+        const dur = convertDurationToSeconds(metadata.Duration);
+        showAlert(`File is valid. Video duration is ${Math.round(dur)} seconds.`, 'is-success');
+        setupClipControls(dur);
+        document.getElementById('runButton').disabled = false;
+        window.validatedFile = { file, inputDir, inputFile, metadata };
+      } catch (err) {
+        console.error(err);
+        showAlert('An error occurred during validation.', 'is-danger');
+        document.getElementById('runButton').disabled = true;
+      } finally {
+        await cleanupDir(inputDir);
+      }
+    }
+
+    /* ------------------------------------------------------------------
+       Main processing
+    ------------------------------------------------------------------ */
+    async function runCommand () {
+      const runBtn = document.getElementById('runButton');
+      if (!window.validatedFile) {
+        showAlert('Please validate a video first.', 'is-warning');
+        return;
+      }
+
+      const { file, inputDir, inputFile, metadata } = window.validatedFile;
+      ffmpegLogs.length = 0;
+      await cleanupThumbnails();
+
+      runBtn.classList.add('is-loading');
+      runBtn.disabled = true;
+      showAlert('Processing…', 'is-light');
+
+      try {
+        await ffmpeg.createDir(inputDir);
+        await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
+
+        const dur = convertDurationToSeconds(metadata.Duration);
+        const interval = Math.max(calculateInterval(dur, NUM_THUMBNAILS), 1);
+
+        const args = [
+          '-loglevel', 'error',
+          '-skip_frame', 'nokey',
+          '-i', inputFile,
+          '-vf', `fps=1/${interval},scale=${CROP_WIDTH}:${CROP_HEIGHT}:force_original_aspect_ratio=increase,crop=${CROP_WIDTH}:${CROP_HEIGHT}`,
+          '-flags2', 'fast', '-an', '-sn', '-dn',
+          '/thumbnail_%d.png'
+        ];
+        const rc = await ffmpeg.exec(args);
+        if (rc !== 0) throw new Error('ffmpeg returned non‑zero code');
+
+        document.getElementById('thumbnailsContainer')?.remove();
+        const box = document.createElement('div');
+        box.id = 'thumbnailsContainer';
+        box.className = 'box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto';
+        box.style.gap = '0.25rem';
+        document.querySelector('.container').appendChild(box);
+
+        for (let i = 1; i <= NUM_THUMBNAILS; i++) {
+          const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
+          const url  = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
+          const img  = document.createElement('img');
+          img.src = url;
+          img.className = 'mr-2';
+          img.style.width = '120px';
+          img.style.height = 'auto';
+          img.onload = () => URL.revokeObjectURL(url);
+          box.appendChild(img);
+        }
+
+        showAlert('Thumbnails generated successfully.', 'is-success');
+      } catch (err) {
+        console.error(err);
+        const errLines = ffmpegLogs.filter(l => l.toLowerCase().includes('error'));
+        showAlert(errLines.join('<br/>') || 'Processing failed.', 'is-danger');
+      } finally {
+        await cleanupDir(inputDir);
+        runBtn.classList.remove('is-loading');
+        runBtn.disabled = false;
+      }
+    }
+
+    /* ------------------------------------------------------------------
+       DOM wiring
+    ------------------------------------------------------------------ */
+    document.getElementById('fileInput').addEventListener('change', e => {
+      const f = e.target.files[0];
+      if (f) handleFileValidation(f);
     });
 
     document.getElementById('runButton').addEventListener('click', runCommand);

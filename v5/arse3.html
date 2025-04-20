@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Robust FFmpeg‑wasm demo</title>
+<script type="module">
+import { createFFmpeg, fetchFile } from 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.8/+esm';
+
+const NUM_THUMBS = 20;
+const CROP       = 300;
+const MIN_FPS    = 15;
+const MIN_W      = 640, MIN_H = 360;
+
+/* ---------- helpers ---------------------------------------------------- */
+
+const qs   = s => document.querySelector(s);
+const log  = (...a) => console.log('[ffmpeg]', ...a);
+const alertBox = qs('#alert');
+function msg (html, type = 'is-info') {
+  alertBox.innerHTML = `<div class="notification ${type} is-light">${html}</div>`;
+}
+
+/* make a fresh FFmpeg instance every call */
+async function newFFmpeg (onProgress) {
+  const ffmpeg = createFFmpeg({ log: false, progress: onProgress });
+  await ffmpeg.load();
+  return ffmpeg;
+}
+
+/* ---------- validation -------------------------------------------------- */
+
+async function validate (file) {
+  const ff = await newFFmpeg();
+  try {
+    ff.FS('writeFile', 'in', await fetchFile(file));
+    await ff.exec(['-loglevel','info','-i','in']);           // just probe
+
+    const probe = ff.stderr.join('\n');
+    const dur = /Duration:\s*(\d+):(\d+):(\d+)/.exec(probe);
+    const w_h = /, (\d{3,5})x(\d{3,5})/.exec(probe);
+    const fps = /, (\d+(?:\.\d+)?) fps/.exec(probe);
+
+    if (!dur||!w_h) throw new Error('Could not read metadata');
+
+    const seconds = (+dur[1])*3600 + (+dur[2])*60 + (+dur[3]);
+    const width   = +w_h[1], height = +w_h[2];
+    const fr      = fps ? +fps[1] : 0;
+
+    const errs = [];
+    if (seconds < 20) errs.push('Video shorter than 20 s');
+    if (fr && fr < MIN_FPS) errs.push(`FPS ${fr} < ${MIN_FPS}`);
+    if (width<MIN_W||height<MIN_H) errs.push(`Res ${width}×${height} < ${MIN_W}×${MIN_H}`);
+
+    if (errs.length) throw new Error(errs.join('<br>'));
+
+    msg(`File OK – ${seconds}s, ${width}×${height}, ${Math.round(fr)} fps`,'is-success');
+    return { seconds, ff };                     // keep this instance for the next step
+  } catch (e) {
+    msg(e.message,'is-warning');
+    ff.exit();
+    throw e;
+  }
+}
+
+/* ---------- thumbnail extraction --------------------------------------- */
+
+async function thumbs (file, meta) {
+  const { seconds } = meta;
+  const ff = await newFFmpeg(p => {
+    const pct = Math.round(p * 100);
+    msg(`Generating thumbnails… ${pct}%`,'is-light');
+  });
+
+  try {
+    ff.FS('writeFile','in',await fetchFile(file));
+    const every = Math.max(seconds / NUM_THUMBS, 1);
+
+    await ff.exec([
+      '-y','-loglevel','error','-skip_frame','nokey',
+      '-i','in',
+      '-vf',`fps=1/${every},scale=${CROP}:${CROP}:force_original_aspect_ratio=increase,crop=${CROP}:${CROP}`,
+      '-an','-sn','-dn','thumb_%d.png'
+    ]);
+
+    const box = document.createElement('div');
+    box.className = 'box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto';
+    box.style.gap = '0.25rem';
+    qs('.container').appendChild(box);
+
+    for (let i=1;i<=NUM_THUMBS;i++){
+      try{
+        const data = ff.FS('readFile',`thumb_${i}.png`);
+        const url = URL.createObjectURL(new Blob([data.buffer],{type:'image/png'}));
+        const img = new Image();
+        img.src = url;
+        img.style.width='120px'; img.onload=()=>URL.revokeObjectURL(url);
+        box.appendChild(img);
+      }catch{ break; }                // stop at first missing file
+    }
+    msg('Thumbnails ready.','is-success');
+  } catch (e) {
+    msg('Thumbnail generation failed.','is-danger');
+    console.error(e);
+  } finally {
+    ff.exit();                        // throw the whole module away
+  }
+}
+
+/* ---------- UI wiring --------------------------------------------------- */
+
+qs('#file').addEventListener('change', async e=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  try{
+    const meta = await validate(f);
+    qs('#run').disabled = false;
+    qs('#run').onclick = ()=> thumbs(f,meta);
+  }catch{}
+});
+
+</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+</head>
+<body>
+<section class="section">
+<div class="container">
+  <h1 class="title">Robust FFmpeg‑wasm demo</h1>
+
+  <div id="alert"></div>
+
+  <div class="field">
+    <label class="label">Choose a video</label>
+    <div class="control">
+      <input id="file" class="input" type="file" accept="video/*">
+    </div>
+  </div>
+
+  <button id="run" class="button is-primary" disabled>Generate thumbnails</button>
+</div>
+</section>
+</body>
+</html>

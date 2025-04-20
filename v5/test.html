@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FFmpeg Segment Extractor</title>
+
+  <!-- Your own helper / wasm loader for FFmpeg -->
+  <script src="common.js"></script>
+
+  <!-- Bulma for quick styling -->
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css"/>
+</head>
+<body>
+  <section class="section">
+    <div class="container">
+      <h1 class="title">FFmpeg Segment Extractor</h1>
+
+      <!-- status / error messages -->
+      <div id="alertArea" class="mb-4"></div>
+
+      <!-- video‑file input -->
+      <div class="field">
+        <label class="label">Upload a Video File</label>
+        <div class="control">
+          <input class="input" type="file" id="fileInput" accept="video/*"/>
+        </div>
+      </div>
+
+      <!-- clip‑selection widgets (hidden until a file is validated) -->
+      <div id="clipControlWrapper" class="field mt-4" style="display:none;">
+        <div class="field">
+          <label class="label">Select Clip Length</label>
+          <div class="control">
+            <div class="select">
+              <select id="clipLengthSelect">
+                <option value="20">20 seconds</option>
+                <option value="40">40 seconds</option>
+                <option value="60" selected>60 seconds</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="field mt-2">
+          <label class="label">Select Start Time (seconds)</label>
+          <div class="control">
+            <input class="input" type="number" id="clipStartInput"
+                   min="0" step="1" value="0"/>
+          </div>
+          <p class="help" id="clipTimeRange">Showing 0 s to 60 s</p>
+        </div>
+
+        <div class="field mt-4">
+          <div class="control">
+            <button class="button is-primary"
+                    id="runButton" disabled>Extract Segment</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- thumbnails and any other output appear below -->
+    </div>
+  </section>
+
+  <script>
+    /* ───────────────────────── CONSTANTS ───────────────────────── */
+
+    const CLIP_LENGTH_SHORT  = 20;
+    const CLIP_LENGTH_MEDIUM = 40;
+    const CLIP_LENGTH_LONG   = 60;
+
+    const NUM_THUMBNAILS = 20;
+    const CROP_WIDTH     = 300;
+    const CROP_HEIGHT    = 300;
+
+    const MIN_FPS        = 15;
+    const MIN_RES_WIDTH  = 640;
+    const MIN_RES_HEIGHT = 360;
+
+    /* ───────────────────────── GLOBALS ─────────────────────────── */
+
+    const ffmpegLogs     = [];          // collects stdout / stderr lines
+    const blobUrls       = new Set();   // every Object‑URL we create
+    let   currentWorkDir = null;        // which dir is mounted in the fs
+    window.validatedFile = null;        // details of the file that passed validation
+
+    /* ───────────────────────── HOUSEKEEPING ────────────────────── */
+
+    /** Put the world back to a pristine state so the next file starts fresh. */
+    async function cleanUp () {
+      try {
+        // 1) Revoke Blob URLs.
+        for (const url of blobUrls) URL.revokeObjectURL(url);
+        blobUrls.clear();
+
+        // 2) Remove the thumbnails container.
+        document.getElementById('thumbnailsContainer')?.remove();
+
+        // 3) Unmount / delete the in‑memory directory, if any.
+        if (currentWorkDir) {
+          try { await ffmpeg.unmount(currentWorkDir); } catch {}
+          try { await ffmpeg.deleteDir(currentWorkDir); } catch {}
+          currentWorkDir = null;
+        }
+
+        // 4) Reset UI bits that could confuse the next run.
+        window.validatedFile = null;
+        document.getElementById('runButton').disabled = true;
+        document.getElementById('clipControlWrapper').style.display = 'none';
+      }
+      catch (err) {
+        console.warn('Cleanup error:', err);
+      }
+    }
+
+    /* ───────────────────────── INITIALISATION ──────────────────── */
+
+    async function initialiseFFmpeg () {
+      try {
+        await load(false, p => {
+          const pct = Math.round((p.received / p.total) * 100);
+          console.log(`Loading FFmpeg: ${pct}%`);
+        });
+        console.log('FFmpeg loaded successfully');
+      } catch {
+        console.error('Failed to load FFmpeg');
+        showAlert('Error loading FFmpeg.', 'is-danger');
+      }
+    }
+
+    /* ───────────────────────── SMALL HELPERS ───────────────────── */
+
+    function showAlert (message, type = 'is-info') {
+      const area = document.getElementById('alertArea');
+      area.innerHTML = message
+        ? `<div class="notification ${type} is-light">${message}</div>`
+        : '';
+    }
+
+    function displayMetadata (md) {
+      Object.entries(md).forEach(([k, v]) => console.log(`${k}: ${v}`));
+    }
+
+    function convertDurationToSeconds (d) {
+      if (!d || typeof d !== 'string') return 0;
+      const [h, m, s] = d.split(':').map(Number);
+      return h * 3600 + m * 60 + s;
+    }
+
+    function calculateInterval (duration, count) {
+      return duration / count;
+    }
+
+    function extractMetadataFromLog (log) {
+      const md = {};
+      const dm = log.match(/Duration:\s*(\d{2}:\d{2}:\d{2})\.(\d+)/);
+      const bm = log.match(/bitrate:\s*(\d+\s*kb\/s)/);
+      const rm = log.match(/,\s*(\d{3,5}x\d{3,5})/);
+      const fm = log.match(/(\d+(\.\d+)?)\s*fps/);
+      const vm = log.match(/Video:\s*([^,]+)/);
+      const am = log.match(/Audio:\s*([^,]+)/);
+      if (dm) md.Duration      = `${dm[1]}.${dm[2]}`;
+      if (bm) md.Bitrate       = bm[1];
+      if (rm) md.Resolution    = rm[1];
+      if (fm) md.Framerate     = `${fm[1]} fps`;
+      if (vm) md['Video Codec'] = vm[1];
+      if (am) md['Audio Codec'] = am[1];
+      return md;
+    }
+
+    function validateVideo (meta) {
+      const errs = [];
+      const dur  = convertDurationToSeconds(meta.Duration);
+      if (dur < CLIP_LENGTH_SHORT)
+        errs.push(`Duration too short (${dur} s). Minimum is ${CLIP_LENGTH_SHORT} s.`);
+
+      const fps = parseFloat(meta.Framerate);
+      if (fps < MIN_FPS)
+        errs.push(`Frame‑rate too low (${fps} fps). Minimum is ${MIN_FPS} fps.`);
+
+      const [w, h] = meta.Resolution.split('x').map(Number);
+      if (w < MIN_RES_WIDTH || h < MIN_RES_HEIGHT)
+        errs.push(`Resolution too low (${w}×${h}). Minimum is ${MIN_RES_WIDTH}×${MIN_RES_HEIGHT}.`);
+
+      return errs;
+    }
+
+    /* Clip‑length UI controls (unchanged from earlier version) */
+    function setupClipControls (durationInSeconds) {
+      const wrapper      = document.getElementById('clipControlWrapper');
+      const startInput   = document.getElementById('clipStartInput');
+      const lengthSelect = document.getElementById('clipLengthSelect');
+      const helpLabel    = document.getElementById('clipTimeRange');
+
+      const validLengths = [CLIP_LENGTH_LONG, CLIP_LENGTH_MEDIUM, CLIP_LENGTH_SHORT]
+            .filter(l => durationInSeconds >= l);
+      let clipLength = validLengths[0];
+
+      lengthSelect.value = String(clipLength);
+      startInput.value   = 0;
+
+      for (const opt of lengthSelect.options) {
+        const val      = Number(opt.value);
+        opt.disabled   = !validLengths.includes(val);
+        opt.selected   = val === clipLength;
+      }
+
+      const updateLabel = () => {
+        const maxStart  = Math.floor(durationInSeconds - clipLength);
+        const startVal  = Math.min(Math.max(0, Number(startInput.value)), maxStart);
+        startInput.value = startVal;
+        startInput.max   = maxStart;
+        helpLabel.textContent = `Showing ${startVal} s to ${startVal + clipLength} s`;
+      };
+
+      if (durationInSeconds > CLIP_LENGTH_SHORT) {
+        wrapper.style.display = 'block';
+        updateLabel();
+        lengthSelect.onchange = () => {
+          clipLength = Number(lengthSelect.value);
+          updateLabel();
+        };
+        startInput.oninput = updateLabel;
+      } else {
+        wrapper.style.display = 'none';
+      }
+    }
+
+    /* ───────────────────────── FILE VALIDATION ─────────────────── */
+
+    async function handleFileValidation (file) {
+      await cleanUp();   // always start with a blank slate
+
+      const inputDir  = '/input';
+      const inputFile = `${inputDir}/${file.name}`;
+      currentWorkDir  = inputDir;
+
+      try {
+        ffmpegLogs.length = 0;
+        await ffmpeg.createDir(inputDir);
+        await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
+        await ffmpeg.exec(['-loglevel', 'info', '-i', inputFile]);
+
+        const metadata = extractMetadataFromLog(ffmpegLogs.join('\n'));
+        displayMetadata(metadata);
+
+        const errs = validateVideo(metadata);
+        if (errs.length) {
+          showAlert(errs.join('<br/>'), 'is-warning');
+          return;
+        }
+
+        const dur = convertDurationToSeconds(metadata.Duration);
+        showAlert(`File is valid. Video duration is ${Math.round(dur)} seconds.`, 'is-success');
+        setupClipControls(dur);
+
+        document.getElementById('runButton').disabled = false;
+        window.validatedFile = { file, inputDir, inputFile, metadata };
+
+      } catch (err) {
+        console.error('Validation error:', err);
+        showAlert('An error occurred while validating the file.', 'is-danger');
+      }
+      /* Directory stays mounted – runCommand() needs the file. */
+    }
+
+    /* ───────────────────────── FFmpeg JOB ──────────────────────── */
+
+    async function runCommand () {
+      const btn = document.getElementById('runButton');
+
+      if (!window.validatedFile) {
+        showAlert('Please select and validate a video file first.', 'is-warning');
+        return;
+      }
+
+      const { inputFile, metadata } = window.validatedFile;
+      btn.classList.add('is-loading');
+      btn.disabled = true;
+      showAlert('Processing…', 'is-light');
+
+      try {
+        const duration   = convertDurationToSeconds(metadata.Duration);
+        const startTime  = Number(document.getElementById('clipStartInput').value);
+        const clipLength = Number(document.getElementById('clipLengthSelect').value);
+        const interval   = calculateInterval(duration, NUM_THUMBNAILS);
+
+        ffmpegLogs.length = 0;
+        const args = [
+          '-loglevel', 'error',
+          '-skip_frame', 'nokey',
+          '-i', inputFile,
+          '-ss', startTime,
+          '-t',  clipLength,
+          '-vf', `fps=1/${interval},scale=${CROP_WIDTH}:${CROP_HEIGHT}:force_original_aspect_ratio=increase,crop=${CROP_WIDTH}:${CROP_HEIGHT}`,
+          '-flags2', 'fast', '-an', '-sn', '-dn',
+          '/thumbnail_%03d.png'
+        ];
+        const ret = await ffmpeg.exec(args);
+
+        if (ret !== 0) {
+          const errLines = ffmpegLogs.filter(l => l.toLowerCase().includes('error'));
+          showAlert(errLines.join('<br/>') || 'Thumbnail generation failed.', 'is-danger');
+          return;
+        }
+
+        // Build the thumbnail strip
+        const strip = document.createElement('div');
+        strip.id        = 'thumbnailsContainer';
+        strip.className = 'box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto';
+        strip.style.gap = '0.25rem';
+        document.querySelector('.container').appendChild(strip);
+
+        for (let i = 1; i <= NUM_THUMBNAILS; i++) {
+          const data = await ffmpeg.readFile(`/thumbnail_${String(i).padStart(3,'0')}.png`);
+          const url  = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
+          blobUrls.add(url);
+          const img = Object.assign(new Image(), {
+            src: url,
+            className: 'mr-2',
+            style: 'width:120px;height:auto'
+          });
+          strip.appendChild(img);
+        }
+
+        showAlert('Thumbnails generated successfully.', 'is-success');
+      }
+      catch (err) {
+        console.error('Processing error:', err);
+        showAlert('An error occurred while processing the video.', 'is-danger');
+      }
+      finally {
+        await cleanUp();               // always tidy, success or fail
+        btn.classList.remove('is-loading');
+      }
+    }
+
+    /* ───────────────────────── EVENT WIRING ────────────────────── */
+
+    document.getElementById('fileInput')
+            .addEventListener('change', e => {
+              const file = e.target.files[0];
+              if (file) handleFileValidation(file);
+            });
+
+    document.getElementById('runButton')
+            .addEventListener('click', runCommand);
+
+    // Ensure no stray resources when the user closes / reloads the page.
+    window.addEventListener('beforeunload', cleanUp);
+
+    // Kick off FFmpeg loading.
+    initialiseFFmpeg();
+  </script>
+</body>
+</html>

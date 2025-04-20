@@ -86,17 +86,25 @@
         : '';
     }
 
-    async function cleanUpFFmpeg() {
-      try { await ffmpeg.exit(); } catch (err) {}
-      try { await ffmpeg.load(); } catch (err) {}
+    function displayMetadata(metadata) {
+      Object.entries(metadata).forEach(([k, v]) => {
+        console.log(`${k}: ${v}`);
+      });
     }
 
     async function handleFileValidation(file) {
       const inputDir = '/input';
       const inputFile = `${inputDir}/${file.name}`;
       ffmpegLogs.length = 0;
+      window.validatedFile = null;
 
       try {
+        // Clean up any prior mount
+        try {
+          await ffmpeg.unmount(inputDir);
+          await ffmpeg.deleteDir(inputDir);
+        } catch (e) {}
+
         await ffmpeg.createDir(inputDir);
         await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
         await ffmpeg.exec(['-loglevel', 'info', '-i', inputFile]);
@@ -108,20 +116,22 @@
         const validationErrors = validateVideo(metadata);
         if (validationErrors.length > 0) {
           showAlert(validationErrors.join('<br/>'), 'is-warning');
-          await ffmpeg.unmount(inputDir);
-          await ffmpeg.deleteDir(inputDir);
           document.getElementById('runButton').disabled = true;
           return;
         }
 
         showAlert('File is valid. You may now extract a segment.', 'is-success');
         document.getElementById('runButton').disabled = false;
-
         window.validatedFile = { file, inputDir, inputFile, metadata };
       } catch (err) {
         console.error('Validation error:', err);
         showAlert('An error occurred while validating the file.', 'is-danger');
         document.getElementById('runButton').disabled = true;
+      } finally {
+        try {
+          await ffmpeg.unmount(inputDir);
+          await ffmpeg.deleteDir(inputDir);
+        } catch (e) {}
       }
     }
 
@@ -139,6 +149,9 @@
       showAlert('Processing…', 'is-light');
 
       try {
+        await ffmpeg.createDir(inputDir);
+        await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
+
         const durationInSeconds = convertDurationToSeconds(metadata.Duration);
 
         const clipWrapper = document.getElementById('clipControlWrapper');
@@ -278,12 +291,6 @@
       }
 
       return errors;
-    }
-
-    function displayMetadata(metadata) {
-      Object.entries(metadata).forEach(([k, v]) => {
-        console.log(`${k}: ${v}`);
-      });
     }
 
     document.getElementById('fileInput').addEventListener('change', async (event) => {

@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FFmpeg Segment Extractor</title>
+  <script src="common.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css"/>
+</head>
+<body>
+  <section class="section">
+    <div class="container">
+      <h1 class="title">FFmpeg Segment Extractor</h1>
+
+      <div id="alertArea" class="mb-4"></div>
+
+      <div class="field">
+        <label class="label">Upload a Video File</label>
+        <div class="control">
+          <input class="input" type="file" id="fileInput" accept="video/*"/>
+        </div>
+      </div>
+
+      <div id="clipControlWrapper" class="field mt-4" style="display: none;">
+        <div class="field">
+          <label class="label">Select Clip Length</label>
+          <div class="control">
+            <div class="select">
+              <select id="clipLengthSelect">
+                <option value="20">20 seconds</option>
+                <option value="40">40 seconds</option>
+                <option value="60" selected>60 seconds</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="field mt-2">
+          <label class="label">Select Start Time (seconds)</label>
+          <div class="control">
+            <input class="input" type="number" id="clipStartInput" min="0" step="1" value="0" />
+          </div>
+          <p class="help" id="clipTimeRange">Showing 0s to 60s</p>
+        </div>
+
+        <div class="field mt-4">
+          <div class="control">
+            <button class="button is-primary" id="runButton" disabled>Extract Segment</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="outputLabel" class="mt-4"></div>
+    </div>
+  </section>
+
+  <script>
+    const CLIP_LENGTH_SHORT = 20;
+    const CLIP_LENGTH_MEDIUM = 40;
+    const CLIP_LENGTH_LONG = 60;
+
+    const NUM_THUMBNAILS = 20;
+    const CROP_WIDTH = 300;
+    const CROP_HEIGHT = 300;
+    const MIN_FPS = 15;
+    const MIN_RES_WIDTH = 640;
+    const MIN_RES_HEIGHT = 360;
+
+    async function initializeFFmpeg() {
+      try {
+        await load(false, progress => {
+          const pct = Math.round((progress.received / progress.total) * 100);
+          console.log(`Loading FFmpeg: ${pct}%`);
+        });
+        console.log('FFmpeg loaded successfully');
+      } catch (error) {
+        console.error('Failed to load FFmpeg');
+        showAlert('Error loading FFmpeg.', 'is-danger');
+      }
+    }
+
+    function showAlert(message, type = 'is-info') {
+      const alertArea = document.getElementById('alertArea');
+      alertArea.innerHTML = message
+        ? `<div class="notification ${type} is-light">${message}</div>`
+        : '';
+    }
+
+    function displayMetadata(metadata) {
+      Object.entries(metadata).forEach(([k, v]) => {
+        console.log(`${k}: ${v}`);
+      });
+    }
+
+    function setupClipControls(durationInSeconds) {
+      const clipWrapper = document.getElementById('clipControlWrapper');
+      const clipInput = document.getElementById('clipStartInput');
+      const clipLengthSelect = document.getElementById('clipLengthSelect');
+      const clipLabel = document.getElementById('clipTimeRange');
+      const runButton = document.getElementById('runButton');
+
+      const validLengths = [CLIP_LENGTH_LONG, CLIP_LENGTH_MEDIUM, CLIP_LENGTH_SHORT].filter(length => durationInSeconds >= length);
+      let clipLength = validLengths[0];
+
+      // Reset clip length and start input
+      clipLengthSelect.value = String(clipLength);
+      clipInput.value = 0;
+
+      Array.from(clipLengthSelect.options).forEach(opt => {
+        const val = Number(opt.value);
+        opt.disabled = !validLengths.includes(val);
+        opt.selected = val === clipLength;
+      });
+
+      function updateClipRangeDisplay() {
+        const maxStart = Math.floor(durationInSeconds - clipLength);
+        const startValue = Math.min(Math.max(0, Number(clipInput.value)), maxStart);
+        clipInput.value = startValue;
+        clipInput.max = maxStart;
+        clipLabel.textContent = `Showing ${startValue}s to ${startValue + clipLength}s`;
+      }
+
+      if (durationInSeconds > CLIP_LENGTH_SHORT) {
+        clipWrapper.style.display = 'block';
+        updateClipRangeDisplay();
+
+        clipLengthSelect.onchange = () => {
+          clipLength = Number(clipLengthSelect.value);
+          updateClipRangeDisplay();
+          runButton.disabled = false;
+        };
+
+        clipInput.oninput = () => {
+          updateClipRangeDisplay();
+          runButton.disabled = false;
+        };
+      } else {
+        clipWrapper.style.display = 'none';
+      }
+    }
+
+    async function handleFileValidation(file) {
+      const inputDir = '/input';
+      const inputFile = `${inputDir}/${file.name}`;
+      ffmpegLogs.length = 0;
+      window.validatedFile = null;
+
+      // Clear thumbnails
+      const existingContainer = document.getElementById('thumbnailsContainer');
+      if (existingContainer) existingContainer.remove();
+
+      try {
+        try {
+          await ffmpeg.unmount(inputDir);
+          await ffmpeg.deleteDir(inputDir);
+        } catch (e) {}
+
+        await ffmpeg.createDir(inputDir);
+        await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
+        await ffmpeg.exec(['-loglevel', 'info', '-i', inputFile]);
+
+        const logContent = ffmpegLogs.join('\n');
+        const metadata = extractMetadataFromLog(logContent);
+        displayMetadata(metadata);
+
+        const validationErrors = validateVideo(metadata);
+        if (validationErrors.length > 0) {
+          showAlert(validationErrors.join('<br/>'), 'is-warning');
+          document.getElementById('runButton').disabled = true;
+          return;
+        }
+
+        const duration = convertDurationToSeconds(metadata.Duration);
+        showAlert(`File is valid. Video duration is ${Math.round(duration)} seconds. You may now select your segment.`, 'is-success');
+        setupClipControls(duration);
+        document.getElementById('runButton').disabled = false;
+        window.validatedFile = { file, inputDir, inputFile, metadata };
+      } catch (err) {
+        console.error('Validation error:', err);
+        showAlert('An error occurred while validating the file.', 'is-danger');
+        document.getElementById('runButton').disabled = true;
+      } finally {
+        try {
+          await ffmpeg.unmount(inputDir);
+          await ffmpeg.deleteDir(inputDir);
+        } catch (e) {}
+      }
+    }
+
+    async function runCommand() {
+      const runButton = document.getElementById('runButton');
+
+      if (!window.validatedFile) {
+        showAlert('Please select and validate a video file first.', 'is-warning');
+        return;
+      }
+
+      const { file, inputDir, inputFile, metadata } = window.validatedFile;
+
+      runButton.disabled = true;
+      showAlert('Processing…', 'is-light');
+
+      try {
+        await ffmpeg.createDir(inputDir);
+        await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
+
+        const clipStartTime = Number(document.getElementById('clipStartInput').value);
+        const clipLength = Number(document.getElementById('clipLengthSelect').value);
+
+        const durationInSeconds = convertDurationToSeconds(metadata.Duration);
+
+        const existingContainer = document.getElementById('thumbnailsContainer');
+        if (existingContainer) existingContainer.remove();
+
+        const interval = calculateInterval(durationInSeconds, NUM_THUMBNAILS);
+        const thumbnailArgs = [
+          '-loglevel', 'error',
+          '-skip_frame', 'nokey',
+          '-i', inputFile,
+          '-vf', `fps=1/${interval},scale=${CROP_WIDTH}:${CROP_HEIGHT}:force_original_aspect_ratio=increase,crop=${CROP_WIDTH}:${CROP_HEIGHT}`,
+          '-flags2', 'fast', '-an', '-sn', '-dn',
+          '/thumbnail_%d.png'
+        ];
+        const ret = await ffmpeg.exec(thumbnailArgs);
+
+        if (ret !== 0) {
+          let errorOutput = ffmpegLogs.filter(line => line.toLowerCase().includes('error')).join('<br/>');
+          if (!errorOutput) {
+            const tail = ffmpegLogs.slice(-5).join('<br/>');
+            errorOutput = 'Thumbnail generation failed. Recent log output:<br/>' + tail;
+          }
+
+          showAlert(errorOutput, 'is-danger');
+          return;
+        }
+
+        const thumbnailsContainer = document.createElement('div');
+        thumbnailsContainer.id = 'thumbnailsContainer';
+        thumbnailsContainer.className = 'box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto';
+        thumbnailsContainer.style.gap = '0.25rem';
+        document.querySelector('.container').appendChild(thumbnailsContainer);
+
+        for (let i = 1; i <= NUM_THUMBNAILS; i++) {
+          const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
+          const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
+          const img = document.createElement('img');
+          img.src = url;
+          img.className = 'mr-2';
+          img.style.width = '120px';
+          img.style.height = 'auto';
+          thumbnailsContainer.appendChild(img);
+        }
+
+        showAlert('Thumbnails generated successfully.', 'is-success');
+      } catch (error) {
+        console.error('Exception caught:', error);
+        showAlert('An error occurred while processing the video.', 'is-danger');
+      } finally {
+        await ffmpeg.unmount(inputDir);
+        await ffmpeg.deleteDir(inputDir);
+        window.validatedFile = null;
+        document.getElementById('runButton').disabled = true;
+      }
+    }
+
+    function convertDurationToSeconds(d) {
+      if (!d || typeof d !== 'string') return 0;
+      const [h, m, s] = d.split(':').map(Number);
+      return h * 3600 + m * 60 + s;
+    }
+
+    function calculateInterval(d, count) {
+      return d / count;
+    }
+
+    function extractMetadataFromLog(log) {
+      const md = {};
+      const dm = log.match(/Duration:\s*(\d{2}:\d{2}:\d{2})\.(\d+)/);
+      const bm = log.match(/bitrate:\s*(\d+ kb\/s)/);
+      const rm = log.match(/, (\d{3,5}x\d{3,5})/);
+      const fm = log.match(/(\d+(\.\d+)?) fps/);
+      const vm = log.match(/Video: ([^,]+)/);
+      const am = log.match(/Audio: ([^,]+)/);
+      if (dm) md.Duration = `${dm[1]}.${dm[2]}`;
+      if (bm) md.Bitrate = bm[1];
+      if (rm) md.Resolution = rm[1];
+      if (fm) md.Framerate = `${fm[1]} fps`;
+      if (vm) md['Video Codec'] = vm[1];
+      if (am) md['Audio Codec'] = am[1];
+      return md;
+    }
+
+    function validateVideo(meta) {
+      const errors = [];
+      const d = convertDurationToSeconds(meta.Duration);
+      if (d < CLIP_LENGTH_SHORT) errors.push(`Duration too short (${d}s). Minimum is ${CLIP_LENGTH_SHORT}s.`);
+
+      const fps = parseFloat(meta.Framerate);
+      if (fps < MIN_FPS) errors.push(`Frame rate too low (${fps} fps). Minimum is ${MIN_FPS} fps.`);
+
+      const [w, h] = meta.Resolution.split('x').map(Number);
+      if (w < MIN_RES_WIDTH || h < MIN_RES_HEIGHT) {
+        errors.push(`Resolution too low (${w}x${h}). Minimum is ${MIN_RES_WIDTH}x${MIN_RES_HEIGHT}.`);
+      }
+
+      return errors;
+    }
+
+    document.getElementById('fileInput').addEventListener('change', async (event) => {
+      const file = event.target.files[0];
+      if (file) await handleFileValidation(file);
+    });
+
+    document.getElementById('runButton').addEventListener('click', runCommand);
+    initializeFFmpeg();
+  </script>
+</body>
+</html>

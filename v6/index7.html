@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FFmpeg Segment Extractor (Single File)</title>
+    <script src="common.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css" />
+    <style>
+        /* Hide controls initially via CSS */
+        #clipControlWrapper {
+            display: none;
+        }
+        /* Style thumbnails */
+        #thumbnailsContainer img {
+             width: 120px;
+             height: auto;
+             margin-right: 0.25rem; /* Consistent spacing */
+        }
+        #thumbnailsContainer {
+             gap: 0.25rem; /* Consistent spacing */
+        }
+    </style>
+</head>
+<body>
+    <section class="section">
+        <div class="container">
+            <h1 class="title">FFmpeg Segment Extractor</h1>
+
+            <div id="alertArea" class="mb-4"></div>
+
+            <div class="field">
+                <label for="fileInput" class="label">Upload a Video File</label>
+                <div class="control">
+                    <input class="input" type="file" id="fileInput" accept="video/*" />
+                </div>
+            </div>
+
+            <div id="clipControlWrapper" class="field mt-4">
+                <div class="field">
+                    <label for="clipLengthSelect" class="label">Select Clip Length</label>
+                    <div class="control">
+                        <div class="select">
+                            <select id="clipLengthSelect">
+                                <option value="20">20 seconds</option>
+                                <option value="40">40 seconds</option>
+                                <option value="60" selected>60 seconds</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="field mt-2">
+                    <label for="clipStartInput" class="label">Select Start Time (seconds)</label>
+                    <div class="control">
+                        <input class="input" type="number" id="clipStartInput" min="0" step="1" value="0" />
+                    </div>
+                    <p class="help" id="clipTimeRange">Showing 0s to 60s</p>
+                </div>
+
+                <div class="field mt-4">
+                    <div class="control">
+                        <button class="button is-primary" id="runButton" disabled>Extract Segment</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="outputArea" class="mt-4"></div>
+        </div>
+    </section>
+
+    <script>
+        /**
+         * @fileoverview Main script for FFmpeg Segment Extractor using ffmpeg-wasm (embedded).
+         * Handles video validation, thumbnail generation, and UI updates.
+         * Relies on `common.js` providing global `ffmpeg`, `load`, and `ffmpegLogs`.
+         */
+
+        // Ensure ffmpeg and load are available from common.js
+        if (typeof ffmpeg === 'undefined' || typeof load === 'undefined') {
+            console.error('Error: common.js did not provide `ffmpeg` or `load`.');
+            // Optionally display an error to the user here
+            const alertArea = document.getElementById('alertArea');
+            if (alertArea) {
+                alertArea.innerHTML = `<div class="notification is-danger is-light">Critical Error: Could not initialize required components. Please check common.js.</div>`;
+            }
+            // Prevent further execution if core components are missing
+            throw new Error("FFmpeg components not loaded from common.js");
+        } else {
+
+            /* ------------------------------------------------------------------
+                Constants
+            ------------------------------------------------------------------ */
+            const CLIP_LENGTH_SHORT   = 20;
+            const CLIP_LENGTH_MEDIUM  = 40;
+            const CLIP_LENGTH_LONG    = 60;
+
+            const NUM_THUMBNAILS      = 20;
+            const CROP_WIDTH          = 300;
+            const CROP_HEIGHT         = 300;
+            const MIN_FPS             = 15;
+            const MIN_RES_WIDTH       = 640;
+            const MIN_RES_HEIGHT      = 360;
+
+            /* ------------------------------------------------------------------
+                Global State (consider encapsulating if app grows)
+            ------------------------------------------------------------------ */
+            /** @type {{file: File, metadata: object} | null} */
+            let validatedFile = null;
+            // Assumes `ffmpegLogs` is a global array provided by `common.js`
+            if (typeof ffmpegLogs === 'undefined') {
+                console.warn('`ffmpegLogs` array not found globally, creating an empty one.');
+                window.ffmpegLogs = []; // Define if missing, though common.js should provide it
+            }
+
+
+            /* ------------------------------------------------------------------
+                DOM Element References
+            ------------------------------------------------------------------ */
+            const fileInput = document.getElementById('fileInput');
+            const alertArea = document.getElementById('alertArea');
+            const clipControlWrapper = document.getElementById('clipControlWrapper');
+            const clipLengthSelect = document.getElementById('clipLengthSelect');
+            const clipStartInput = document.getElementById('clipStartInput');
+            const clipTimeRange = document.getElementById('clipTimeRange');
+            const runButton = document.getElementById('runButton');
+            const outputArea = document.getElementById('outputArea'); // Used for thumbnails
+            const container = document.querySelector('.container'); // Parent for outputArea/thumbnails
+
+            /* ------------------------------------------------------------------
+                FFmpeg & Filesystem Helpers
+            ------------------------------------------------------------------ */
+
+            /**
+             * Resets the FFmpeg worker by exiting the current one and loading a new one.
+             * @async
+             */
+            async function resetFFmpeg() {
+                console.log('Resetting FFmpeg worker...');
+                try {
+                    await ffmpeg.exit();
+                    console.log('Previous FFmpeg worker exited.');
+                } catch (error) {
+                    // Ignore errors if worker wasn't running or already exited
+                    console.warn('Ignoring error during ffmpeg.exit():', error?.message);
+                }
+                try {
+                    await ffmpeg.load();
+                    console.log('New FFmpeg worker loaded.');
+                } catch (error) {
+                    console.error('Failed to load new FFmpeg worker after reset:', error);
+                    showAlert('Error initializing FFmpeg worker.', 'is-danger');
+                    throw error; // Re-throw to potentially stop subsequent actions
+                }
+            }
+
+            /**
+             * Robustly unmounts and deletes a directory in the virtual filesystem.
+             * Retries unmounting if the directory is busy.
+             * @async
+             * @param {string} dir - The directory path to clean up (e.g., '/input_123').
+             */
+            async function cleanupDir(dir) {
+                console.log(`Cleaning up directory: ${dir}`);
+                // Retry unmounting if busy
+                let attempt = 0;
+                const MAX_ATTEMPTS = 5;
+                const RETRY_DELAY = 100; // ms
+
+                while (attempt < MAX_ATTEMPTS) {
+                    try {
+                        await ffmpeg.unmount(dir);
+                        console.log(`Unmounted ${dir}`);
+                        break; // Success
+                    } catch (err) {
+                        if (!/busy/i.test(err?.message)) {
+                            console.warn(`Unmount failed for ${dir} with non-busy error (maybe already unmounted?):`, err?.message);
+                            break; // Not a busy error, probably already unmounted or other issue
+                        }
+                        attempt++;
+                        if (attempt >= MAX_ATTEMPTS) {
+                            console.error(`[cleanup] Failed to unmount ${dir} after ${MAX_ATTEMPTS} attempts.`);
+                            // Proceed to deleteDir anyway, it might fail but we tried
+                            break;
+                        }
+                        console.warn(`[cleanup] ${dir} still busy – retrying (${attempt}/${MAX_ATTEMPTS})...`);
+                        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY)); // Wait before retrying
+                    }
+                }
+
+                // Attempt to delete the directory
+                try {
+                    await ffmpeg.deleteDir(dir);
+                    console.log(`Deleted directory ${dir}`);
+                } catch (err) {
+                    console.warn(`Failed to delete directory ${dir} (might be expected if unmount failed):`, err?.message);
+                }
+            }
+
+            /**
+             * Deletes any previously generated thumbnail files from the virtual filesystem.
+             * @async
+             */
+            async function cleanupThumbnails() {
+                console.log('Cleaning up previous thumbnails...');
+                for (let i = 1; i <= NUM_THUMBNAILS; i++) {
+                    const filename = `/thumbnail_${i}.png`;
+                    try {
+                        await ffmpeg.deleteFile(filename);
+                    } catch (_) {
+                        // Ignore errors (file might not exist)
+                    }
+                }
+                // Remove the container from the DOM too
+                document.getElementById('thumbnailsContainer')?.remove();
+            }
+
+            /* ------------------------------------------------------------------
+                UI Helpers
+            ------------------------------------------------------------------ */
+
+            /**
+             * Displays a message in the alert area.
+             * @param {string | null} message - The message to display. If null or empty, clears the area.
+             * @param {string} [type='is-info'] - The Bulma notification type (e.g., 'is-success', 'is-warning', 'is-danger').
+             */
+            function showAlert(message, type = 'is-info') {
+                if (!alertArea) return; // Guard against missing element
+                alertArea.innerHTML = message
+                    ? `<div class="notification ${type} is-light">${message}</div>`
+                    : '';
+            }
+
+            /**
+             * Sets up the clip selection controls based on the video duration.
+             * @param {number} duration - The total duration of the video in seconds.
+             */
+            function setupClipControls(duration) {
+                if (!clipControlWrapper || !clipLengthSelect || !clipStartInput || !clipTimeRange || !runButton) return;
+
+                const validLengths = [CLIP_LENGTH_LONG, CLIP_LENGTH_MEDIUM, CLIP_LENGTH_SHORT]
+                    .filter(len => duration >= len); // Available lengths based on duration
+
+                if (validLengths.length === 0) {
+                    console.warn(`Video duration (${duration}s) is shorter than the shortest clip length (${CLIP_LENGTH_SHORT}s). Hiding controls.`);
+                    clipControlWrapper.style.display = 'none';
+                    runButton.disabled = true; // Can't extract if too short
+                    showAlert(`Video is too short (${Math.round(duration)}s) to extract a ${CLIP_LENGTH_SHORT}s clip.`, 'is-warning');
+                    return;
+                }
+
+                let currentClipLength = validLengths[0]; // Default to longest valid length
+
+                // Enable/disable options and select default
+                [...clipLengthSelect.options].forEach(option => {
+                    const value = Number(option.value);
+                    option.disabled = !validLengths.includes(value);
+                    option.selected = (value === currentClipLength);
+                });
+                clipLengthSelect.value = String(currentClipLength); // Ensure select reflects the value
+
+                clipStartInput.value = 0; // Reset start time
+
+                const updateControls = () => {
+                    // Recalculate maxStartTime based on potentially changed clip length
+                    const maxStartTime = Math.floor(duration - currentClipLength);
+                    // Ensure current value respects the new max
+                    const currentStartTime = Math.min(Math.max(0, Number(clipStartInput.value)), maxStartTime);
+
+                    clipStartInput.value = currentStartTime;
+                    clipStartInput.max = maxStartTime;
+                    // Set attribute as well for browser validation
+                    clipStartInput.setAttribute('max', String(maxStartTime));
+
+                    clipTimeRange.textContent = `Showing ${currentStartTime}s to ${currentStartTime + currentClipLength}s`;
+                };
+
+                // Show controls and set initial state
+                clipControlWrapper.style.display = 'block';
+                updateControls(); // Call initially
+
+                // Add event listeners
+                clipLengthSelect.onchange = () => {
+                    currentClipLength = Number(clipLengthSelect.value);
+                    updateControls(); // Update start input max/value when length changes
+                };
+                clipStartInput.oninput = updateControls; // Update label on input change
+            }
+
+
+            /* ------------------------------------------------------------------
+                Validation Helpers
+            ------------------------------------------------------------------ */
+
+            /**
+             * Converts FFmpeg duration string (HH:MM:SS.ms) to seconds.
+             * @param {string | undefined} durationString - The duration string.
+             * @returns {number} Duration in seconds, or 0 if invalid.
+             */
+            function convertDurationToSeconds(durationString) {
+                if (!durationString || typeof durationString !== 'string' || !durationString.includes(':')) {
+                    return 0;
+                }
+                const parts = durationString.split(':');
+                let seconds = 0;
+                try {
+                    if (parts.length === 3) {
+                        seconds += Number(parts[0]) * 3600; // Hours
+                        seconds += Number(parts[1]) * 60;   // Minutes
+                        seconds += parseFloat(parts[2]);    // Seconds (can have decimals)
+                    } else if (parts.length === 2) {
+                        seconds += Number(parts[0]) * 60;   // Minutes
+                        seconds += parseFloat(parts[1]);    // Seconds
+                    } else if (parts.length === 1) {
+                        seconds += parseFloat(parts[0]);    // Seconds only
+                    }
+                } catch (e) {
+                    console.error("Error parsing duration string:", durationString, e);
+                    return 0;
+                }
+                return isNaN(seconds) ? 0 : seconds;
+            }
+
+            /**
+             * Calculates the time interval between thumbnails.
+             * @param {number} duration - Total video duration in seconds.
+             * @param {number} count - Desired number of thumbnails.
+             * @returns {number} Interval in seconds.
+             */
+            function calculateInterval(duration, count) {
+                if (duration <= 0 || count <= 0) return 1; // Avoid division by zero or nonsensical results
+                return Math.max(duration / count, 0.1); // Ensure a minimum interval if duration is very short
+            }
+
+            /**
+             * Extracts key metadata from FFmpeg's console output.
+             * @param {string} logOutput - The combined log output from FFmpeg.
+             * @returns {object} An object containing extracted metadata fields.
+             */
+            function extractMetadataFromLog(logOutput) {
+                const metadata = {};
+                const durationMatch = logOutput.match(/Duration:\s*([\d:.]+)/);
+                const bitrateMatch = logOutput.match(/bitrate:\s*(\d+\s*kb\/s)/);
+                const resolutionMatch = logOutput.match(/,\s*(\d{3,5}x\d{3,5})[\s,\[]/);
+                const framerateMatch = logOutput.match(/(\d+(?:\.\d+)?)\s*fps/);
+                const videoCodecMatch = logOutput.match(/Video:\s*([^,\s]+)/);
+                const audioCodecMatch = logOutput.match(/Audio:\s*([^,\s]+)/);
+
+                if (durationMatch) metadata.Duration = durationMatch[1];
+                if (bitrateMatch) metadata.Bitrate = bitrateMatch[1];
+                if (resolutionMatch) metadata.Resolution = resolutionMatch[1];
+                if (framerateMatch) metadata.Framerate = `${framerateMatch[1]} fps`;
+                if (videoCodecMatch) metadata['Video Codec'] = videoCodecMatch[1];
+                if (audioCodecMatch) metadata['Audio Codec'] = audioCodecMatch[1];
+
+                return metadata;
+            }
+
+            /**
+             * Validates video metadata against predefined requirements.
+             * @param {object} metadata - The metadata object extracted from FFmpeg logs.
+             * @returns {string[]} An array of validation error messages. Empty if valid.
+             */
+            function validateVideo(metadata) {
+                const errors = [];
+                const duration = convertDurationToSeconds(metadata.Duration);
+                if (duration < CLIP_LENGTH_SHORT) {
+                    errors.push(`Duration too short (${duration.toFixed(1)}s). Minimum is ${CLIP_LENGTH_SHORT}s.`);
+                }
+
+                const fps = metadata.Framerate ? parseFloat(metadata.Framerate) : 0;
+                if (fps && fps < MIN_FPS) {
+                    errors.push(`Frame rate too low (${fps.toFixed(1)} fps). Minimum is ${MIN_FPS} fps.`);
+                }
+
+                const [width = 0, height = 0] = metadata.Resolution
+                    ? metadata.Resolution.split('x').map(Number)
+                    : [0, 0];
+
+                if (width < MIN_RES_WIDTH || height < MIN_RES_HEIGHT) {
+                    errors.push(`Resolution too low (${width}x${height}). Minimum is ${MIN_RES_WIDTH}x${MIN_RES_HEIGHT}.`);
+                }
+                return errors;
+            }
+
+            /* ------------------------------------------------------------------
+                Core Logic - File Validation
+            ------------------------------------------------------------------ */
+
+            /**
+             * Handles the video file validation process when a file is selected.
+             * @async
+             * @param {File} file - The video file selected by the user.
+             */
+            async function handleFileValidation(file) {
+                if (!file || !runButton || !clipControlWrapper) return; // Guard
+                console.log(`Validating file: ${file.name}`);
+                showAlert('Validating video file...', 'is-light');
+                runButton.disabled = true;
+                clipControlWrapper.style.display = 'none'; // Hide controls during validation
+                validatedFile = null; // Reset previous validation result
+                await cleanupThumbnails(); // Clear any old thumbnails
+
+                const inputDir = `/input_validate_${Date.now()}`; // Unique directory for validation
+                const inputFile = `${inputDir}/${file.name}`;
+                let needsCleanup = false; // Track if cleanupDir is needed
+
+                try {
+                    await resetFFmpeg(); // Ensure a fresh worker state
+
+                    ffmpegLogs.length = 0; // Clear previous logs
+
+                    await ffmpeg.createDir(inputDir);
+                    needsCleanup = true; // Mark that cleanup is needed
+                    // Mount the selected file into the virtual directory
+                    await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
+                    console.log(`Mounted ${file.name} to ${inputFile} for validation.`);
+
+                    console.log('Running FFmpeg to extract metadata...');
+                    await ffmpeg.exec(['-hide_banner', '-loglevel', 'info', '-i', inputFile]);
+                    console.log('FFmpeg metadata extraction finished.');
+
+                    const logOutput = ffmpegLogs.join('\n');
+                    const metadata = extractMetadataFromLog(logOutput);
+                    console.log('Extracted Metadata:');
+                    console.table(metadata);
+
+                    const validationIssues = validateVideo(metadata);
+                    if (validationIssues.length > 0) {
+                        showAlert(`Validation Issues:<br/>${validationIssues.join('<br/>')}`, 'is-warning');
+                        console.warn('Validation failed:', validationIssues);
+                        // Keep run button disabled
+                    } else {
+                        const duration = convertDurationToSeconds(metadata.Duration);
+                        showAlert(`File is valid. Video duration: ${duration.toFixed(1)} seconds.`, 'is-success');
+                        setupClipControls(duration); // Setup UI based on duration
+                        runButton.disabled = false; // Enable the run button
+                        // Store validated info for the run command - only need file and metadata now
+                        validatedFile = { file, metadata };
+                        console.log('Validation successful.');
+                    }
+                } catch (error) {
+                    console.error('Error during file validation:', error);
+                    console.error('FFmpeg logs during error:', ffmpegLogs.join('\n'));
+                    showAlert(`An error occurred during validation: ${error.message || 'Unknown error'}`, 'is-danger');
+                    runButton.disabled = true; // Ensure button is disabled on error
+                } finally {
+                    // Clean up the temporary validation directory and unmount the file
+                    if (needsCleanup) {
+                        await cleanupDir(inputDir);
+                    } else {
+                        console.log("Skipping cleanup as mount might not have happened.");
+                    }
+                }
+            }
+
+
+            /* ------------------------------------------------------------------
+                Core Logic - Thumbnail Extraction
+            ------------------------------------------------------------------ */
+
+            /**
+             * Runs the FFmpeg command to extract thumbnails based on user selection.
+             * @async
+             */
+            async function runCommand() {
+                if (!validatedFile) {
+                    showAlert('Please select and validate a video file first.', 'is-warning');
+                    return;
+                }
+                if (!runButton || !clipStartInput || !clipLengthSelect || !outputArea) return; // Guard
+
+                const { file, metadata } = validatedFile;
+                const clipStartTime = Number(clipStartInput.value);
+                const clipLength = Number(clipLengthSelect.value);
+
+                console.log(`Starting thumbnail extraction for ${file.name}. Start: ${clipStartTime}s, Length: ${clipLength}s`);
+                runButton.classList.add('is-loading');
+                runButton.disabled = true;
+                showAlert('Processing video and generating thumbnails...', 'is-light');
+                await cleanupThumbnails(); // Clear any previous thumbnails/container
+
+                const inputDir = `/input_process_${Date.now()}`; // Unique directory for processing
+                const inputFile = `${inputDir}/${file.name}`;
+                let needsCleanup = false;
+
+                try {
+                    await resetFFmpeg(); // Fresh worker for the main task
+
+                    ffmpegLogs.length = 0; // Clear logs
+
+                    await ffmpeg.createDir(inputDir);
+                    needsCleanup = true;
+                    // Mount the file again for processing
+                    await ffmpeg.mount('WORKERFS', { files: [file] }, inputDir);
+                    console.log(`Mounted ${file.name} to ${inputFile} for processing.`);
+
+                    // Calculate interval based on the selected clip length
+                    const interval = calculateInterval(clipLength, NUM_THUMBNAILS);
+                    console.log(`Thumbnail interval calculated: ${interval.toFixed(2)}s`);
+
+                    const outputPattern = '/thumbnail_%d.png';
+
+                    const args = [
+                        '-hide_banner',
+                        '-loglevel', 'error',
+                        '-ss', String(clipStartTime),
+                        '-i', inputFile,
+                        '-t', String(clipLength),
+                        '-vf', `fps=1/${interval},scale=${CROP_WIDTH}:${CROP_HEIGHT}:force_original_aspect_ratio=increase,crop=${CROP_WIDTH}:${CROP_HEIGHT}`,
+                        '-vsync', 'vfr',
+                        '-an', '-sn', '-dn',
+                        '-y',
+                        outputPattern
+                    ];
+
+                    console.log('Executing FFmpeg command:', args.join(' '));
+                    const startTime = performance.now();
+                    const rc = await ffmpeg.exec(args);
+                    const endTime = performance.now();
+                    console.log(`FFmpeg execution finished with code ${rc}. Time: ${((endTime - startTime) / 1000).toFixed(2)}s`);
+
+                    // Check for errors even if rc is 0, as FFmpeg might log errors without non-zero exit
+                    const errorLogs = ffmpegLogs.filter(l => /error/i.test(l)).join('\n');
+                    if (rc !== 0 || errorLogs) {
+                        throw new Error(`FFmpeg execution failed (rc=${rc}). ${errorLogs ? 'Logs:\n' + errorLogs : ''}`);
+                    }
+
+                    // --- Display Thumbnails ---
+                    console.log('Reading and displaying generated thumbnails...');
+                    const thumbnailsContainer = document.createElement('div');
+                    thumbnailsContainer.id = 'thumbnailsContainer';
+                    thumbnailsContainer.className = 'box mt-4 is-flex is-flex-wrap-nowrap is-overflow-auto';
+
+                    let thumbnailsFound = 0;
+                    // Check a few extra indices in case numbering isn't perfectly sequential
+                    for (let i = 1; i <= NUM_THUMBNAILS + 5; i++) {
+                        const thumbFilename = `/thumbnail_${i}.png`;
+                        try {
+                            const data = await ffmpeg.readFile(thumbFilename);
+                            if (data && data.length > 0) {
+                                const blob = new Blob([data.buffer], { type: 'image/png' });
+                                const imageUrl = URL.createObjectURL(blob);
+                                const img = document.createElement('img');
+                                img.src = imageUrl;
+                                img.alt = `Thumbnail ${i}`;
+                                // Cleanup blob URL when image loads or errors
+                                img.onload = img.onerror = () => URL.revokeObjectURL(imageUrl);
+                                thumbnailsContainer.appendChild(img);
+                                thumbnailsFound++;
+                            } else {
+                                // Stop if we read an empty file (less likely but possible)
+                                break;
+                            }
+                        } catch (e) {
+                            // Error reading likely means no more thumbnails exist with this index
+                            if (i > NUM_THUMBNAILS) break; // Stop searching if we're past the expected count
+                            // Otherwise continue, maybe numbering skipped
+                        }
+                    }
+
+                    if (thumbnailsFound > 0) {
+                        outputArea.innerHTML = ''; // Clear previous content
+                        outputArea.appendChild(thumbnailsContainer);
+                        showAlert(`Successfully generated ${thumbnailsFound} thumbnails.`, 'is-success');
+                        console.log(`Displayed ${thumbnailsFound} thumbnails.`);
+                    } else {
+                        console.warn("FFmpeg ran successfully but no thumbnail files were found/read.");
+                        showAlert('Processing finished, but no thumbnails were generated. Check console logs.', 'is-warning');
+                        console.warn('FFmpeg logs:', ffmpegLogs.join('\n'));
+                    }
+
+                } catch (error) {
+                    console.error('Error during thumbnail extraction:', error);
+                    const errorLogText = ffmpegLogs.filter(l => /error/i.test(l)).join('<br/>');
+                    showAlert(errorLogText || `Processing failed: ${error.message || 'Unknown error'}`, 'is-danger');
+                    console.error('FFmpeg logs during error:', ffmpegLogs.join('\n'));
+
+                    // Attempt a hard reset on fatal error
+                    console.warn('Attempting FFmpeg worker reload after fatal error...');
+                    try {
+                        await resetFFmpeg();
+                        console.info('FFmpeg worker successfully reloaded after fatal error.');
+                    } catch (reloadErr) {
+                        console.error('FATAL: Failed to reload FFmpeg worker after error:', reloadErr);
+                        showAlert('Processing failed, and FFmpeg could not be reset. Please refresh the page.', 'is-danger');
+                    }
+                } finally {
+                    // Cleanup the processing directory and unmount the file
+                    if (needsCleanup) {
+                        await cleanupDir(inputDir);
+                    }
+                    // Re-enable button and remove loading indicator
+                    if (runButton) {
+                        runButton.classList.remove('is-loading');
+                        // Only re-enable if a file is still considered valid
+                        runButton.disabled = !validatedFile;
+                    }
+                }
+            }
+
+            /* ------------------------------------------------------------------
+                FFmpeg Initialization & Event Listeners
+            ------------------------------------------------------------------ */
+
+            /**
+             * Initializes the FFmpeg instance on page load.
+             * @async
+             */
+            async function initialiseFFmpeg() {
+                 if (!fileInput || !runButton) {
+                     console.error("Cannot initialize, required UI elements missing.");
+                     showAlert("Initialization Error: UI elements missing.", "is-danger");
+                     return;
+                 }
+                showAlert('Loading FFmpeg core...', 'is-light');
+                 // Disable controls initially
+                 fileInput.disabled = true;
+                 runButton.disabled = true;
+                try {
+                    // Using the `load` function assumed from common.js
+                    await load(false, p => { // Assuming false = don't load core MT version
+                        const percentage = Math.round((p.received / p.total) * 100);
+                        console.log(`Loading FFmpeg: ${percentage}%`);
+                        showAlert(`Loading FFmpeg core... ${percentage}%`, 'is-light');
+                    });
+                    console.info('FFmpeg loaded successfully.');
+                    showAlert('FFmpeg loaded. Please upload a video file.', 'is-info');
+                    // Enable file input now that FFmpeg is ready
+                    fileInput.disabled = false;
+                } catch (err) {
+                    console.error('Failed to load FFmpeg:', err);
+                    showAlert('Error loading FFmpeg library. Check console for details.', 'is-danger');
+                    // Keep controls disabled if loading failed
+                }
+            }
+
+            // --- Attach Event Listeners ---
+            if (fileInput) {
+                fileInput.addEventListener('change', (event) => {
+                    const file = event.target.files?.[0];
+                    if (file) {
+                        handleFileValidation(file);
+                    } else {
+                        // Clear validation state if file selection is cancelled
+                        validatedFile = null;
+                         if (runButton) runButton.disabled = true;
+                         if (clipControlWrapper) clipControlWrapper.style.display = 'none';
+                        showAlert('File selection cancelled.', 'is-info');
+                    }
+                });
+            } else {
+                console.error('File input element not found.');
+                showAlert('Error: File input element missing.', 'is-danger');
+            }
+
+
+            if (runButton) {
+                runButton.addEventListener('click', runCommand);
+            } else {
+                console.error('Run button element not found.');
+            }
+
+
+            // --- Start Initialization ---
+            initialiseFFmpeg();
+
+        } // End of check for ffmpeg/load
+    </script>
+
+</body>
+</html>

@@ -222,9 +222,14 @@
         const vf = `fps=1/${fpsRate},scale=${CONFIG.crop.width}:${CONFIG.crop.height}:force_original_aspect_ratio=increase,crop=${CONFIG.crop.width}:${CONFIG.crop.height}`;
 
         try {
+          // Simplified ffmpeg command: seek and duration after input for better compatibility
           await ffmpeg.exec([
-            '-y', '-loglevel', 'error', '-ss', startSec.toString(), '-t', lengthSec.toString(), '-skip_frame', 'nokey', '-i', path,
-            '-vf', vf, '-flags2', 'fast', '-an', '-sn', '-dn', '/thumbnail_%d.png'
+            '-y',
+            '-i', path,
+            '-ss', startSec.toString(),
+            '-t', lengthSec.toString(),
+            '-vf', vf,
+            '/thumbnail_%d.png'
           ]);
 
           const frag = document.createDocumentFragment();
@@ -248,24 +253,15 @@
           showAlert('Thumbnails generated successfully.', 'is-success');
         } catch (e) {
           console.error('Generate Thumbnails Error:', e);
-          showAlert('Processing failed.', 'is-danger');
+          console.error('FFmpeg logs:', ffmpegLogs.join('
+'));
+          showAlert('Processing failed. Check console for ffmpeg errors.', 'is-danger');
         } finally {
           await cleanupDir(dir);
           dom.runButton.classList.remove('is-loading');
           dom.runButton.disabled = false;
         }
       };
-
-      dom.fileInput.addEventListener('change', async e => {
-        const file = e.target.files[0]; if (!file) return;
-        showAlert('Validating…', 'is-info');
-        const result = await validateFile(file);
-        if (result) {
-          showAlert(`File is valid: ${result.duration}s`, 'is-success');
-          setupControls(result.duration);
-          validated = result;
-        }
-      });
 
       dom.runButton.addEventListener('click', () => {
         dom.runButton.classList.add('is-loading');

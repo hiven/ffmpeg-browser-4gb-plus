@@ -83,19 +83,18 @@
        Generic helpers
     ------------------------------------------------------------------ */
 
-    /** Robustly un‑mount and delete a directory (bounded retries). */
-    async function cleanupDir (dir, attempts = 5, delayMs = 200) {      // IMPROVEMENT #1
-      for (let i = 0; i < attempts; i++) {
+    /** Robustly un‑mount and delete a directory (loop until free). */
+    async function cleanupDir (dir) {
+      while (true) {
         try {
-          await ffmpeg.unmount(dir);   // succeeds? we’re done
-          break;
+          await ffmpeg.unmount(dir);
         } catch (err) {
-          if (!/busy/i.test(err?.message)) break;  // not “busy” → stop
-          console.warn(`[cleanup] ${dir} busy – retry ${i + 1}/${attempts}`);
-          await new Promise(r => setTimeout(r, delayMs)); // small back‑off
+          if (!/busy/i.test(err?.message)) break; // nothing mounted
+          console.warn(`[cleanup] ${dir} still busy – retrying…`);
+          continue;
         }
       }
-      try { await ffmpeg.deleteDir(dir); } catch (_) {/* ignored */}
+      try { await ffmpeg.deleteDir(dir); } catch (_) {}
     }
 
     /** Delete any thumbnails from a previous run. */
@@ -305,23 +304,17 @@
         box.style.gap = '0.25rem';
         document.querySelector('.container').appendChild(box);
 
-        /* Fetch thumbnails concurrently (keeps order) — IMPROVEMENT #2 */
-        const buffers = await Promise.all(
-          Array.from({ length: NUM_THUMBNAILS }, (_, i) =>
-            ffmpeg.readFile(`/thumbnail_${i + 1}.png`)
-          )
-        );
-
-        buffers.forEach((data, i) => {
-          const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
-          const img = document.createElement('img');
+        for (let i = 1; i <= NUM_THUMBNAILS; i++) {
+          const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
+          const url  = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
+          const img  = document.createElement('img');
           img.src = url;
           img.className = 'mr-2';
           img.style.width = '120px';
           img.style.height = 'auto';
           img.onload = () => URL.revokeObjectURL(url);
           box.appendChild(img);
-        });
+        }
 
         showAlert('Thumbnails generated successfully.', 'is-success');
       } catch (err) {

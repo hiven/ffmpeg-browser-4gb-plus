@@ -83,14 +83,14 @@
        Generic helpers
     ------------------------------------------------------------------ */
 
-    /** Robustly un‑mount and delete a directory (bounded retries). — IMPROVEMENT #1 */
-    async function cleanupDir (dir, attempts = 5, delayMs = 200) {
+    /** Robustly un‑mount and delete a directory (bounded retries). */
+    async function cleanupDir (dir, attempts = 5, delayMs = 200) {      // IMPROVEMENT #1
       for (let i = 0; i < attempts; i++) {
         try {
-          await ffmpeg.unmount(dir);     // succeeds? we’re done
+          await ffmpeg.unmount(dir);   // succeeds? we’re done
           break;
         } catch (err) {
-          if (!/busy/i.test(err?.message)) break; // not “busy” → stop
+          if (!/busy/i.test(err?.message)) break;  // not “busy” → stop
           console.warn(`[cleanup] ${dir} busy – retry ${i + 1}/${attempts}`);
           await new Promise(r => setTimeout(r, delayMs)); // small back‑off
         }
@@ -218,9 +218,9 @@
        File validation flow
     ------------------------------------------------------------------ */
     async function handleFileValidation (file) {
-      await resetFFmpeg();
+      await resetFFmpeg();                         // ← NEW
 
-      const inputDir  = `/input_${Date.now()}`;
+      const inputDir  = `/input_${Date.now()}`;    // fresh mount‑point
       const inputFile = `${inputDir}/${file.name}`;
       ffmpegLogs.length = 0;
       window.validatedFile = null;
@@ -267,7 +267,7 @@
         return;
       }
 
-      await resetFFmpeg();
+      await resetFFmpeg();                         // ← NEW
 
       const { file, metadata } = window.validatedFile;
       const inputDir  = `/input_${Date.now()}`;
@@ -287,7 +287,7 @@
         const interval = Math.max(calculateInterval(dur, NUM_THUMBNAILS), 1);
 
         const args = [
-          '-y',
+          '-y',                               // overwrite any existing thumbnails
           '-loglevel', 'error',
           '-skip_frame', 'nokey',
           '-i', inputFile,
@@ -305,7 +305,7 @@
         box.style.gap = '0.25rem';
         document.querySelector('.container').appendChild(box);
 
-        /* Fetch thumbnails concurrently — IMPROVEMENT #2 */
+        /* Fetch thumbnails concurrently (keeps order) — IMPROVEMENT #2 */
         const buffers = await Promise.all(
           Array.from({ length: NUM_THUMBNAILS }, (_, i) =>
             ffmpeg.readFile(`/thumbnail_${i + 1}.png`)

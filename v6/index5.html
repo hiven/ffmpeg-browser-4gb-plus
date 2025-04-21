@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FFmpeg Segment Extractor</title>
+  <script src="common.js"></script> <!-- ffmpeg‑wasm loader & helpers -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css"/>
+</head>
+<body>
+  <section class="section">
+    <div class="container">
+      <h1 class="title">FFmpeg Segment Extractor</h1>
+
+      <div id="alertArea" class="mb-4"></div>
+
+      <div class="field">
+        <label for="fileInput" class="label">Upload a Video File</label>
+        <div class="control">
+          <input class="input" type="file" id="fileInput" accept="video/*"/>
+        </div>
+      </div>
+
+      <div id="clipControlWrapper" class="field mt-4" style="display: none;">
+        <div class="field">
+          <label for="clipLengthSelect" class="label">Select Clip Length</label>
+          <div class="control">
+            <div class="select">
+              <select id="clipLengthSelect">
+                <option value="20">20 seconds</option>
+                <option value="40">40 seconds</option>
+                <option value="60" selected>60 seconds</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="field mt-2">
+          <label for="clipStartInput" class="label">Select Start Time (seconds)</label>
+          <div class="control">
+            <input class="input" type="number" id="clipStartInput" min="0" step="1" value="0" />
+          </div>
+          <p class="help" id="clipTimeRange">Showing 0s to 60s</p>
+        </div>
+
+        <div class="field mt-4">
+          <div class="control">
+            <button class="button is-primary" id="runButton" disabled>Extract Segment</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="outputLabel" class="mt-4"></div>
+    </div>
+  </section>
+
+  <script>
+    /* ------------------------------------------------------------------
+       Constants
+    ------------------------------------------------------------------ */
+    const CLIP_LENGTH_SHORT  = 20;
+    const CLIP_LENGTH_MEDIUM = 40;
+    const CLIP_LENGTH_LONG   = 60;
+
+    const NUM_THUMBNAILS   = 20;
+    const CROP_WIDTH       = 300;
+    const CROP_HEIGHT      = 300;
+    const MIN_FPS          = 15;
+    const MIN_RES_WIDTH    = 640;
+    const MIN_RES_HEIGHT   = 360;
+
+    /* ------------------------------------------------------------------
+       Fresh‑start the global FFmpeg worker
+    ------------------------------------------------------------------ */
+    async function resetFFmpeg () {
+      try { await ffmpeg.exit(); } catch (_) {}
+      await ffmpeg.load();
+    }
+
+    /* ------------------------------------------------------------------
+       Generic helpers
+    ------------------------------------------------------------------ */
+
+    /** Robustly un‑mount and delete a directory (loop until free). */
+    async function cleanupDir (dir) {
+      while (true) {
+        try { await ffmpeg.unmount(dir); }
+        catch (err) {
+          if (!/busy/i.test(err?.message)) break;
+          console.warn(`[cleanup] ${dir} still busy – retrying…`);
+          continue;
+        }
+      }
+      try { await ffmpeg.deleteDir(dir); } catch (_) {}
+    }
+
+    /** Delete any thumbnails from a previous run (concurrently). */
+    async function cleanupThumbnails () {                               /* EDIT #2 */
+      await Promise.allSettled(
+        Array.from({ length: NUM_THUMBNAILS }, (_, i) =>
+          ffmpeg.deleteFile(`/thumbnail_${i + 1}.png`)
+        )
+      );
+    }
+
+    function showAlert (message, type = 'is-info') {
+      const alertArea = document.getElementById('alertArea');
+      alertArea.innerHTML = message
+        ? `<div class="notification ${type} is-light">${message}</div>`
+        : '';
+    }
+
+    /* ------------------------------------------------------------------
+       FFmpeg initialisation
+    ------------------------------------------------------------------ */
+    async function initialiseFFmpeg () {
+      try {
+        await load(false, p => {
+          const pct = Math.round((p.received / p.total) * 100);
+          console.log(`Loading FFmpeg: ${pct}%`);
+        });
+        console.info('FFmpeg loaded');
+      } catch (err) {
+        console.error('Failed to load FFmpeg', err);
+        showAlert('Error loading FFmpeg.', 'is-danger');
+      }
+    }
+
+    /* ------------------------------------------------------------------
+       Clip control UI
+    ------------------------------------------------------------------ */
+    function setupClipControls (duration) {
+      const wrapper  = document.getElementById('clipControlWrapper');
+      const startInp = document.getElementById('clipStartInput');
+      const lenSel   = document.getElementById('clipLengthSelect');
+      const rangeLbl = document.getElementById('clipTimeRange');
+
+      const valid = [CLIP_LENGTH_LONG, CLIP_LENGTH_MEDIUM, CLIP_LENGTH_SHORT]
+        .filter(l => duration >= l);
+      let clipLen = valid[0];
+
+      lenSel.value = String(clipLen);
+      startInp.value = 0;
+
+      [...lenSel.options].forEach(o => {
+        const v = Number(o.value);
+        o.disabled = !valid.includes(v);
+        o.selected = v === clipLen;
+      });
+
+      const refresh = () => {
+        const max     = Math.floor(duration - clipLen);
+        const current = Math.min(Math.max(0, Number(startInp.value)), max);
+        startInp.value = current;
+        startInp.max   = max;
+        startInp.setAttribute('max', String(max));
+        rangeLbl.textContent = `Showing ${current}s to ${current + clipLen}s`;
+      };
+
+      if (duration > CLIP_LENGTH_SHORT) {
+        wrapper.style.display = 'block';
+        refresh();
+        /* ---- EDIT #1 ------------------------------------------------ */
+        lenSel.addEventListener('change', () => {                     /* EDIT */
+          clipLen = Number(lenSel.value);
+          refresh();
+        });
+        startInp.addEventListener('input', refresh);                  /* EDIT */
+        /* ------------------------------------------------------------ */
+      } else {
+        wrapper.style.display = 'none';
+      }
+    }
+
+    /* ------------------------------------------------------------------
+       (everything from validation helpers down to DOM wiring
+       remains unchanged)
+    ------------------------------------------------------------------ */
+    /* ... your original functions: convertDurationToSeconds(),
+           calculateInterval(), extractMetadataFromLog(), validateVideo(),
+           handleFileValidation(), runCommand(), plus event wiring ...     */
+  </script>
+</body>
+</html>

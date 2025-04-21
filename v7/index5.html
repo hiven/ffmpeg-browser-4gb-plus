@@ -228,7 +228,7 @@
             frag.appendChild(img);
           }
           dom.thumbsContainer.appendChild(frag);
-          // showAlert('Thumbnails generated successfully.', 'is-success');
+           showAlert('Thumbnails generated successfully.', 'is-success');
         } catch (e) {
           console.error('Generate Thumbnails Error:', e);
           showAlert('Processing failed.', 'is-danger');
@@ -243,10 +243,10 @@
       dom.fileInput.addEventListener('change', async e => {
         const file = e.target.files[0];
         if (!file) return;
-        // showAlert('Validating…', 'is-info');
+         showAlert('Validating…', 'is-info');
         const result = await validateFile(file);
         if (result) {
-          // showAlert(`File is valid: ${result.duration}s`, 'is-success');
+           showAlert(`File is valid: ${result.duration}s`, 'is-success');
           setupControls(result.duration);
           validated = result;
         }

@@ -254,7 +254,7 @@
         } catch (e) {
           console.error('Generate Thumbnails Error:', e);
           console.error('FFmpeg logs:', ffmpegLogs.join('
-'));
+')));
           showAlert('Processing failed. Check console for ffmpeg errors.', 'is-danger');
         } finally {
           await cleanupDir(dir);

@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>FFmpeg Segment Extractor</title>
+  <script src="common.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma/css/bulma.min.css"/>
+  <style>
+    /* Thumbnail container styling */
+    .thumbnail-box {
+      position: relative;
+      display: inline-block;
+      margin: 0.25rem;
+    }
+    .thumbnail-box img {
+      display: block;
+      width: 120px;
+      height: auto;
+      border-radius: 4px;
+    }
+    .thumbnail-box .timestamp {
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      background: rgba(0, 0, 0, 0.6);
+      color: #fff;
+      padding: 2px 4px;
+      font-size: 0.75rem;
+      border-radius: 2px;
+      line-height: 1;
+    }
+  </style>
+</head>
+<body>
+  <section class="section">
+    <div class="container">
+      <h1 class="title">FFmpeg Segment Extractor</h1>
+      <div id="alertArea" class="mb-4"></div>
+
+      <div class="field">
+        <label for="fileInput" class="label">Upload a Video File</label>
+        <div class="control">
+          <input id="fileInput" class="input" type="file" accept="video/*" disabled />
+        </div>
+      </div>
+
+      <div id="clipControlWrapper" class="field mt-4" style="display:none;">
+        <div class="field">
+          <label for="clipLengthSelect" class="label">Select Clip Length</label>
+          <div class="control select">
+            <select id="clipLengthSelect"></select>
+          </div>
+        </div>
+        <div class="field mt-2">
+          <label for="clipStartInput" class="label">Select Start Time (seconds)</label>
+          <div class="control">
+            <input id="clipStartInput" class="input" type="number" min="0" step="1" />
+          </div>
+          <p id="clipTimeRange" class="help" aria-live="polite"></p>
+        </div>
+        <div class="field mt-4">
+          <div class="control">
+            <button id="runButton" class="button is-primary" disabled>Extract Segment</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="thumbnailsContainer" class="mt-4"></div>
+    </div>
+  </section>
+
+  <script>
+    (async () => {
+      'use strict';
+
+      const CONFIG = {
+        clipLengths: [60, 40, 20],
+        numThumbnails: 20,
+        crop: { width: 300, height: 300 },
+        min: { fps: 15, width: 640, height: 360 }
+      };
+
+      const dom = {
+        fileInput: document.getElementById('fileInput'),
+        alertArea: document.getElementById('alertArea'),
+        clipWrapper: document.getElementById('clipControlWrapper'),
+        clipLength: document.getElementById('clipLengthSelect'),
+        clipStart: document.getElementById('clipStartInput'),
+        clipRange: document.getElementById('clipTimeRange'),
+        runButton: document.getElementById('runButton'),
+        thumbsContainer: document.getElementById('thumbnailsContainer')
+      };
+
+      let validated = null;
+      let resetInProgress = false;
+
+      const showAlert = (msg = '', type = 'is-info') => {
+        dom.alertArea.innerHTML = msg
+          ? `<div class="notification ${type} is-light">${msg}</div>`
+          : '';
+      };
+
+      const cleanupFiles = async (pattern, count) => {
+        await Promise.all(
+          Array.from({ length: count }, (_, i) =>
+            ffmpeg.deleteFile(pattern.replace('%d', i + 1)).catch(() => {})
+          )
+        );
+      };
+
+      const cleanupDir = async dir => {
+        await ffmpeg.unmount(dir).catch(() => {});
+        await ffmpeg.deleteDir(dir).catch(() => {});
+      };
+
+      const parseFFmpegLog = log => {
+        const m = {};
+        const dm = log.match(/Duration:\s*(\d{2}:\d{2}:\d{2})\.(\d+)/);
+        const rm = log.match(/,\s*(\d+x\d+)/);
+        const fm = log.match(/(\d+(?:\.\d+)?) fps/);
+        if (dm) {
+          const parts = dm[1].split(':').map(Number);
+          m.duration = parts[0] * 3600 + parts[1] * 60 + parts[2];
+        }
+        if (rm) m.res = rm[1];
+        if (fm) m.fps = parseFloat(fm[1]);
+        return m;
+      };
+
+      const mountWorkDir = async file => {
+        const dir = `/work_${Date.now()}`;
+        await ffmpeg.createDir(dir);
+        await ffmpeg.mount('WORKERFS', { files: [file] }, dir);
+        return { dir, path: `${dir}/${file.name}` };
+      };
+
+      const initializeFFmpeg = async () => {
+        dom.fileInput.disabled = true;
+        await load(false);
+        dom.fileInput.disabled = false;
+      };
+
+      const resetFFmpeg = async () => {
+        if (resetInProgress) return;
+        resetInProgress = true;
+        try { await ffmpeg.exit(); } catch {}
+        await load(false);
+        resetInProgress = false;
+      };
+
+      const setupControls = duration => {
+        dom.clipLength.innerHTML = CONFIG.clipLengths
+          .filter(l => duration >= l)
+          .map(l => `<option value="${l}">${l}s</option>`)
+          .join('');
+        dom.clipStart.value = 0;
+        const updateRange = () => {
+          const len = +dom.clipLength.value;
+          const max = duration - len;
+          const start = Math.min(Math.max(0, +dom.clipStart.value), max);
+          dom.clipStart.value = start;
+          dom.clipStart.max = max;
+          dom.clipRange.textContent = `Showing ${start}s to ${start + len}s`;
+        };
+        dom.clipLength.onchange = updateRange;
+        dom.clipStart.oninput = updateRange;
+        updateRange();
+        dom.clipWrapper.style.display = '';
+        dom.runButton.disabled = false;
+      };
+
+      const validateFile = async file => {
+        dom.fileInput.disabled = true;
+        await resetFFmpeg();
+        ffmpegLogs.length = 0;
+        dom.thumbsContainer.innerHTML = '';
+        await cleanupFiles('/thumbnail_%d.png', CONFIG.numThumbnails);
+
+        const { dir, path } = await mountWorkDir(file);
+        try {
+          const execPromise = ffmpeg.exec(['-loglevel', 'info', '-i', path]);
+          const logSub = ffmpeg.on('log', ({ message }) => ffmpegLogs.push(message));
+          await execPromise;
+          ffmpeg.off('log', logSub);
+          const meta = parseFFmpegLog(ffmpegLogs.join('\n'));
+          const errors = [];
+          if (!meta.duration || meta.duration < CONFIG.clipLengths.slice(-1)[0])
+            errors.push(`Duration too short.`);
+          if (meta.fps && meta.fps < CONFIG.min.fps)
+            errors.push(`Frame rate too low.`);
+          const [w, h] = (meta.res || '').split('x').map(Number);
+          if (w < CONFIG.min.width || h < CONFIG.min.height)
+            errors.push(`Resolution too low.`);
+          if (errors.length) {
+            showAlert(errors.join('<br/>'), 'is-warning');
+            return null;
+          }
+          return { file, duration: meta.duration };
+        } catch (e) {
+          showAlert('Validation failed.', 'is-danger');
+          console.error('Validation Error:', e);
+          return null;
+        } finally {
+          await cleanupDir(dir);
+          dom.fileInput.disabled = false;
+        }
+      };
+
+      const generateThumbnails = async ({ file, duration }) => {
+        dom.runButton.disabled = true;
+        await resetFFmpeg();
+        ffmpegLogs.length = 0;
+        dom.thumbsContainer.innerHTML = '';
+        await cleanupFiles('/thumbnail_%d.png', CONFIG.numThumbnails);
+        const { dir, path } = await mountWorkDir(file);
+
+        // Get start and length
+        const startSec = Number(dom.clipStart.value) || 0;
+        const lengthSec = Number(dom.clipLength.value) || duration;
+        const fpsRate = Math.max(lengthSec / CONFIG.numThumbnails, 1);
+        const vf = `fps=1/${fpsRate},scale=${CONFIG.crop.width}:${CONFIG.crop.height}:force_original_aspect_ratio=increase,crop=${CONFIG.crop.width}:${CONFIG.crop.height}`;
+
+        try {
+          await ffmpeg.exec([
+            '-y', '-loglevel', 'error', '-ss', startSec.toString(), '-t', lengthSec.toString(), '-skip_frame', 'nokey', '-i', path,
+            '-vf', vf, '-flags2', 'fast', '-an', '-sn', '-dn', '/thumbnail_%d.png'
+          ]);
+
+          const frag = document.createDocumentFragment();
+          for (let i = 1; i <= CONFIG.numThumbnails; i++) {
+            const data = await ffmpeg.readFile(`/thumbnail_${i}.png`);
+            const url = URL.createObjectURL(new Blob([data.buffer], { type: 'image/png' }));
+            const ts = new Date((startSec + (i - 1) * (lengthSec / CONFIG.numThumbnails)) * 1000)
+              .toISOString().substr(11, 8);
+            const box = document.createElement('div');
+            box.className = 'thumbnail-box';
+            const img = document.createElement('img'); img.src = url;
+            img.onload = () => URL.revokeObjectURL(url);
+            const label = document.createElement('span');
+            label.className = 'timestamp';
+            label.textContent = ts;
+            box.appendChild(img);
+            box.appendChild(label);
+            frag.appendChild(box);
+          }
+          dom.thumbnailsContainer.appendChild(frag);
+          showAlert('Thumbnails generated successfully.', 'is-success');
+        } catch (e) {
+          console.error('Generate Thumbnails Error:', e);
+          showAlert('Processing failed.', 'is-danger');
+        } finally {
+          await cleanupDir(dir);
+          dom.runButton.classList.remove('is-loading');
+          dom.runButton.disabled = false;
+        }
+      };
+
+      dom.fileInput.addEventListener('change', async e => {
+        const file = e.target.files[0]; if (!file) return;
+        showAlert('Validating…', 'is-info');
+        const result = await validateFile(file);
+        if (result) {
+          showAlert(`File is valid: ${result.duration}s`, 'is-success');
+          setupControls(result.duration);
+          validated = result;
+        }
+      });
+
+      dom.runButton.addEventListener('click', () => {
+        dom.runButton.classList.add('is-loading');
+        generateThumbnails(validated);
+      });
+
+      await initializeFFmpeg();
+    })();
+  </script>
+</body>
+</html>

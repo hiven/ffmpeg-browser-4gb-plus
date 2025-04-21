@@ -243,7 +243,7 @@
       dom.fileInput.addEventListener('change', async e => {
         const file = e.target.files[0];
         if (!file) return;
-        showAlert('Validating…', 'is-info');
+        // showAlert('Validating…', 'is-info');
         const result = await validateFile(file);
         if (result) {
           // showAlert(`File is valid: ${result.duration}s`, 'is-success');

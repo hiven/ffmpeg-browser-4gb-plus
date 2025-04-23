@@ -150,10 +150,12 @@
 
       const validateFile = async file => {
         dom.fileInput.disabled = true;
+        dom.clipWrapper.style.display = 'none';
+        dom.runButton.disabled = true;
+        dom.thumbsContainer.innerHTML = '';
         showFieldMessage('fileInputHelp', 'Validating…', 'is-info');
         await resetFFmpeg();
         ffmpegLogs.length = 0;
-        dom.thumbsContainer.innerHTML = '';
         await cleanupFiles('/thumbnail_%d.png', CONFIG.numThumbnails);
 
         const { dir, path } = await mountWorkDir(file);
@@ -179,6 +181,9 @@
           return { file, duration: meta.duration };
         } catch (e) {
           showFieldMessage('fileInputHelp', 'Validation failed.', 'is-danger');
+          dom.clipWrapper.style.display = 'none';
+          dom.runButton.disabled = true;
+          dom.thumbsContainer.innerHTML = '';
           console.error('Validation Error:', e);
           return null;
         } finally {
@@ -197,7 +202,7 @@
 
         const startSec = Number(dom.clipStart.value) || 0;
         const lengthSec = Number(dom.clipLength.value) || duration;
-        const vf = `fps=1/${Math.max(lengthSec/CONFIG.numThumbnails,1)},` +
+        const vf = `fps=1/${Math.max(lengthSec / CONFIG.numThumbnails, 1)},` +
                    `scale=${CONFIG.crop.width}:${CONFIG.crop.height}:force_original_aspect_ratio=increase,` +
                    `crop=${CONFIG.crop.width}:${CONFIG.crop.height}`;
 
